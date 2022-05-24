@@ -1,6 +1,9 @@
 """Support for Overkiz covers - shutters etc."""
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, cast
+from typing import Any, cast
 from xmlrpc.client import boolean
 
 from pyoverkiz.enums import OverkizCommand, OverkizCommandParam, OverkizState, UIClass
@@ -22,21 +25,31 @@ from .entity import OverkizDescriptiveEntity
 
 
 def is_closed(device: Device) -> boolean:
-    return device.states[OverkizState.CORE_OPEN_CLOSED] == OverkizCommandParam.CLOSED
+    """Return if the cover is closed."""
+
+    if state := device.states[OverkizState.CORE_OPEN_CLOSED]:
+        return state.value == OverkizCommandParam.CLOSED
+
+    return False
 
 
 @dataclass
-class OverkizCoverDescription(CoverEntityDescription):
+class OverkizCoverDescriptionMixin:
+    """Define an entity description mixin for cover entities."""
+
+    open_command: OverkizCommand
+    close_command: OverkizCommand
+    stop_command: OverkizCommand
+
+
+@dataclass
+class OverkizCoverDescription(CoverEntityDescription, OverkizCoverDescriptionMixin):
     """Class to describe an Overkiz cover."""
 
-    ui_class: UIClass = None
-    current_position_state: OverkizState = None
+    current_position_state: OverkizState | None = None
     invert_position: boolean = True
-    set_position_command: OverkizCommand = None
-    open_command: OverkizCommand = None
-    close_command: OverkizCommand = None
-    is_closed_fn: Callable[[Device], bool] = None
-    stop_command: OverkizCommand = None
+    set_position_command: OverkizCommand | None = None
+    is_closed_fn: Callable[[Device], bool] | None = None
 
 
 COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
@@ -89,27 +102,35 @@ async def async_setup_entry(
 class OverkizCover(OverkizDescriptiveEntity, CoverEntity):
     """Representation of an Overkiz Cover."""
 
-    @property
-    def is_closed(self) -> Optional[boolean]:
-        self.entity_description.is_closed_fn(self.device)
+    entity_description: OverkizCoverDescription
 
     @property
-    def current_cover_position(self) -> Optional[int]:
+    def is_closed(self) -> boolean | None:
+        """Return if the cover is closed."""
+
+        if is_closed_fn := self.entity_description.is_closed_fn:
+            return is_closed_fn(self.device)
+        return None
+
+    @property
+    def current_cover_position(self) -> int | None:
         """
         Return current position of cover.
 
         None is unknown, 0 is closed, 100 is fully open.
         """
-        position = None
-        if current_state := self.device.states[
-            self.entity_description.current_position_state
-        ]:
-            position = current_state.value
+        state_name = self.entity_description.current_position_state
+
+        if not state_name:
+            return None
+
+        if state := self.device.states[state_name]:
+            position = cast(int, state.value)
 
         if self.entity_description.invert_position:
             position = 100 - position
 
-        return cast(int, position)
+        return position
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         """Move the cover to a specific position."""
