@@ -11,6 +11,7 @@ from pyoverkiz.models import Device
 
 from homeassistant.components.cover import (
     ATTR_POSITION,
+    CoverDeviceClass,
     CoverEntity,
     CoverEntityDescription,
 )
@@ -62,6 +63,7 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         invert_position=False,
         is_closed_fn=is_closed,
         stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.AWNING,
     ),
     OverkizCoverDescription(
         key=UIClass.ROLLER_SHUTTER,
@@ -71,6 +73,7 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         close_command=OverkizCommand.CLOSE,
         is_closed_fn=is_closed,
         stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.SHUTTER,
     ),
 ]
 
@@ -155,3 +158,54 @@ class OverkizCover(OverkizDescriptiveEntity, CoverEntity):
         """Stop the cover."""
         if command := self.entity_description.stop_command:
             await self.executor.async_execute_command(command)
+
+    @property
+    def is_opening(self) -> bool | None:
+        """Return if the cover is opening or not."""
+
+        if command := self.entity_description.open_command:
+            if self.is_running(command):
+                return True
+
+        if self.moving_offset is None:
+            return None
+
+        if self.entity_description.invert_position:
+            return self.moving_offset > 0
+        return self.moving_offset < 0
+
+    @property
+    def is_closing(self) -> bool | None:
+        """Return if the cover is opening or not."""
+
+        if command := self.entity_description.close_command:
+            if self.is_running(command):
+                return True
+
+        if self.moving_offset is None:
+            return None
+
+        if self.entity_description.invert_position:
+            return self.moving_offset < 0
+        return self.moving_offset > 0
+
+    def is_running(self, command: OverkizCommand) -> bool:
+        """Return if the given commands are currently running."""
+        return any(
+            execution.get("device_url") == self.device.device_url
+            and execution.get("command_name") == command
+            for execution in self.coordinator.executions.values()
+        )
+
+    @property
+    def moving_offset(self) -> int | None:
+        """Return the offset between the targeted position and the current one if the cover is moving."""
+
+        is_moving = self.device.states.get(OverkizState.CORE_MOVING)
+        current_closure = self.device.states.get(OverkizState.CORE_CLOSURE)
+        target_closure = self.device.states.get(OverkizState.CORE_TARGET_CLOSURE)
+
+        if not is_moving or not current_closure or not target_closure:
+            return None
+
+        return cast(int, current_closure.value) - cast(int, target_closure.value)
