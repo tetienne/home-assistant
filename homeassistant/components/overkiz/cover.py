@@ -100,6 +100,16 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         stop_command=OverkizCommand.STOP,
         device_class=CoverDeviceClass.CURTAIN,
     ),
+    OverkizCoverDescription(
+        key=UIClass.EXTERIOR_SCREEN,
+        current_position_state=OverkizState.CORE_CLOSURE,
+        set_position_command=OverkizCommand.SET_CLOSURE,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        is_closed_fn=is_closed,
+        stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.BLIND,
+    ),
 ]
 
 SUPPORTED_DEVICES = {description.key: description for description in COVER_DESCRIPTIONS}
