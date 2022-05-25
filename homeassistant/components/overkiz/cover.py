@@ -125,6 +125,18 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
     ),
 ]
 
+"""
+    TODO
+    UIClass.GARAGE_DOOR: Platform.COVER,
+    UIClass.GATE: Platform.COVER,
+    UIClass.PERGOLA: Platform.COVER,
+    UIClass.SCREEN: Platform.COVER,
+    UIClass.SHUTTER: Platform.COVER,
+    UIClass.SWINGING_SHUTTER: Platform.COVER,
+    UIClass.VENETIAN_BLIND: Platform.COVER,
+    UIWidget.RTS_GENERIC: Platform.COVER,  # widgetName, uiClass is Generic (not supported)
+    """
+
 SUPPORTED_DEVICES = {description.key: description for description in COVER_DESCRIPTIONS}
 
 
