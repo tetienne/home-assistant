@@ -80,7 +80,7 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         stop_command=OverkizCommand.STOP,
         device_class=CoverDeviceClass.SHUTTER,
     ),
-    OverkizCoverDescription(
+    OverkizCoverDescription(  # To check, it looks like this device can only tilt. Ask help from an owner
         key=UIClass.ADJUSTABLE_SLATS_ROLLER_SHUTTER,
         current_position_state=OverkizState.CORE_CLOSURE,
         set_position_command=OverkizCommand.SET_CLOSURE,
@@ -108,6 +108,19 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         close_command=OverkizCommand.CLOSE,
         is_closed_fn=is_closed,
         stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.BLIND,
+    ),
+    OverkizCoverDescription(
+        key=UIClass.EXTERIOR_VENETIAN_BLIND,
+        current_position_state=OverkizState.CORE_CLOSURE,
+        set_position_command=OverkizCommand.SET_CLOSURE,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        is_closed_fn=is_closed,
+        stop_command=OverkizCommand.STOP,
+        current_tilt_position=OverkizState.CORE_SLATE_ORIENTATION,
+        set_tilt_position_command=OverkizCommand.SET_ORIENTATION,
+        stop_tilt_command=OverkizCommand.STOP,
         device_class=CoverDeviceClass.BLIND,
     ),
 ]
