@@ -11,6 +11,7 @@ from pyoverkiz.models import Device
 
 from homeassistant.components.cover import (
     ATTR_POSITION,
+    ATTR_TILT_POSITION,
     CoverDeviceClass,
     CoverEntity,
     CoverEntityDescription,
@@ -51,6 +52,11 @@ class OverkizCoverDescription(CoverEntityDescription, OverkizCoverDescriptionMix
     invert_position: boolean = True
     set_position_command: OverkizCommand | None = None
     is_closed_fn: Callable[[Device], bool] | None = None
+    current_tilt_position: OverkizState | None = None
+    set_tilt_position_command: OverkizCommand | None = None
+    open_tilt_command: OverkizCommand | None = None
+    close_tilt_command: OverkizCommand | None = None
+    stop_tilt_command: OverkizCommand | None = None
 
 
 COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
@@ -73,6 +79,19 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         close_command=OverkizCommand.CLOSE,
         is_closed_fn=is_closed,
         stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.SHUTTER,
+    ),
+    OverkizCoverDescription(
+        key=UIClass.ADJUSTABLE_SLATS_ROLLER_SHUTTER,
+        current_position_state=OverkizState.CORE_CLOSURE,
+        set_position_command=OverkizCommand.SET_CLOSURE,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        is_closed_fn=is_closed,
+        stop_command=OverkizCommand.STOP,
+        current_tilt_position=OverkizState.CORE_SLATE_ORIENTATION,
+        set_tilt_position_command=OverkizCommand.SET_ORIENTATION,
+        stop_tilt_command=OverkizCommand.STOP,
         device_class=CoverDeviceClass.SHUTTER,
     ),
 ]
@@ -157,6 +176,43 @@ class OverkizCover(OverkizDescriptiveEntity, CoverEntity):
     async def async_stop_cover(self, **kwargs: Any) -> None:
         """Stop the cover."""
         if command := self.entity_description.stop_command:
+            await self.executor.async_execute_command(command)
+
+    @property
+    def current_cover_tilt_position(self) -> int | None:
+        """Return current position of cover tilt.
+
+        None is unknown, 0 is closed, 100 is fully open.
+        """
+        state_name = self.entity_description.current_position_state
+
+        if not state_name:
+            return None
+
+        if state := self.device.states[state_name]:
+            return cast(int, state.value)
+
+        return None
+
+    async def async_set_cover_tilt_position(self, **kwargs: Any) -> None:
+        """Move the cover tilt to a specific position."""
+        position = kwargs[ATTR_TILT_POSITION]
+        if command := self.entity_description.set_tilt_position_command:
+            await self.executor.async_execute_command(command, position)
+
+    async def async_open_tilt_cover(self, **kwargs: Any) -> None:
+        """Open the cover tilt."""
+        if command := self.entity_description.open_tilt_command:
+            await self.executor.async_execute_command(command)
+
+    async def async_close_tilt_cover(self, **kwargs: Any) -> None:
+        """Close the cover tilt."""
+        if command := self.entity_description.close_tilt_command:
+            await self.executor.async_execute_command(command)
+
+    async def async_stop_tilt_cover(self, **kwargs: Any) -> None:
+        """Stop the cover tilt."""
+        if command := self.entity_description.stop_tilt_command:
             await self.executor.async_execute_command(command)
 
     @property
