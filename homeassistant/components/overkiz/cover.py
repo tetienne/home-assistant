@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
-from xmlrpc.client import boolean
 
 from pyoverkiz.enums import OverkizCommand, OverkizCommandParam, OverkizState, UIClass
 from pyoverkiz.models import Device
@@ -26,7 +25,7 @@ from .const import DOMAIN
 from .entity import OverkizDescriptiveEntity
 
 
-def is_closed(device: Device) -> boolean:
+def is_closed(device: Device) -> bool | None:
     """Return if the cover is closed."""
 
     if state := device.states[OverkizState.CORE_OPEN_CLOSED]:
@@ -49,9 +48,9 @@ class OverkizCoverDescription(CoverEntityDescription, OverkizCoverDescriptionMix
     """Class to describe an Overkiz cover."""
 
     current_position_state: OverkizState | None = None
-    invert_position: boolean = True
+    invert_position: bool = True
     set_position_command: OverkizCommand | None = None
-    is_closed_fn: Callable[[Device], bool] | None = None
+    is_closed_fn: Callable[[Device], bool | None] | None = None
     current_tilt_position: OverkizState | None = None
     set_tilt_position_command: OverkizCommand | None = None
     open_tilt_command: OverkizCommand | None = None
@@ -87,12 +86,19 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         set_position_command=OverkizCommand.SET_CLOSURE,
         open_command=OverkizCommand.OPEN,
         close_command=OverkizCommand.CLOSE,
-        is_closed_fn=is_closed,
         stop_command=OverkizCommand.STOP,
         current_tilt_position=OverkizState.CORE_SLATE_ORIENTATION,
         set_tilt_position_command=OverkizCommand.SET_ORIENTATION,
         stop_tilt_command=OverkizCommand.STOP,
-        device_class=CoverDeviceClass.SHUTTER,
+        device_class=CoverDeviceClass.BLIND,
+    ),
+    OverkizCoverDescription(
+        key=UIClass.CURTAIN,
+        set_position_command=OverkizCommand.SET_CLOSURE,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.CURTAIN,
     ),
 ]
 
@@ -127,11 +133,14 @@ class OverkizCover(OverkizDescriptiveEntity, CoverEntity):
     entity_description: OverkizCoverDescription
 
     @property
-    def is_closed(self) -> boolean | None:
+    def is_closed(self) -> bool | None:
         """Return if the cover is closed."""
 
         if is_closed_fn := self.entity_description.is_closed_fn:
             return is_closed_fn(self.device)
+
+        # Fallback to self.current_cover_position == 0 ?
+
         return None
 
     @property
