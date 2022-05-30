@@ -35,18 +35,12 @@ def is_closed(device: Device) -> bool | None:
 
 
 @dataclass
-class OverkizCoverDescriptionMixin:
-    """Define an entity description mixin for cover entities."""
-
-    open_command: OverkizCommand
-    close_command: OverkizCommand
-    stop_command: OverkizCommand
-
-
-@dataclass
-class OverkizCoverDescription(CoverEntityDescription, OverkizCoverDescriptionMixin):
+class OverkizCoverDescription(CoverEntityDescription):
     """Class to describe an Overkiz cover."""
 
+    open_command: OverkizCommand | None = None
+    close_command: OverkizCommand | None = None
+    stop_command: OverkizCommand | None = None
     current_position_state: OverkizState | None = None
     invert_position: bool = True
     set_position_command: OverkizCommand | None = None
@@ -123,13 +117,21 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         stop_tilt_command=OverkizCommand.STOP,
         device_class=CoverDeviceClass.BLIND,
     ),
+    OverkizCoverDescription(
+        key=UIClass.PERGOLA,
+        current_tilt_position=OverkizState.CORE_SLATE_ORIENTATION,
+        set_tilt_position_command=OverkizCommand.SET_ORIENTATION,
+        open_tilt_command=OverkizCommand.OPEN_SLATS,
+        close_tilt_command=OverkizCommand.CLOSE_SLATS,
+        stop_tilt_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.AWNING,
+    ),
 ]
 
 """
     TODO
     UIClass.GARAGE_DOOR: Platform.COVER,
     UIClass.GATE: Platform.COVER,
-    UIClass.PERGOLA: Platform.COVER,
     UIClass.SCREEN: Platform.COVER,
     UIClass.SHUTTER: Platform.COVER,
     UIClass.SWINGING_SHUTTER: Platform.COVER,
