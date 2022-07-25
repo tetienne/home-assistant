@@ -126,17 +126,49 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
         stop_tilt_command=OverkizCommand.STOP,
         device_class=CoverDeviceClass.AWNING,
     ),
+    OverkizCoverDescription(
+        key=UIClass.GARAGE_DOOR,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        is_closed_fn=is_closed,
+        stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.GARAGE,
+    ),
+    OverkizCoverDescription(
+        key=UIClass.SCREEN,
+        current_position_state=OverkizState.CORE_CLOSURE,
+        set_position_command=OverkizCommand.SET_CLOSURE,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        is_closed_fn=is_closed,
+        stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.BLIND,
+    ),
+    OverkizCoverDescription(
+        key=UIClass.SHUTTER,
+        current_position_state=OverkizState.CORE_CLOSURE,
+        set_position_command=OverkizCommand.SET_CLOSURE,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        is_closed_fn=is_closed,
+        stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.SHUTTER,
+    ),
+    OverkizCoverDescription(
+        key=UIClass.SWINGING_SHUTTER,
+        current_position_state=OverkizState.CORE_CLOSURE,
+        set_position_command=OverkizCommand.SET_CLOSURE,
+        open_command=OverkizCommand.OPEN,
+        close_command=OverkizCommand.CLOSE,
+        is_closed_fn=is_closed,
+        stop_command=OverkizCommand.STOP,
+        device_class=CoverDeviceClass.SHUTTER,
+    ),
 ]
 
 """
     TODO
-    UIClass.GARAGE_DOOR: Platform.COVER,
-    UIClass.GATE: Platform.COVER,
-    UIClass.SCREEN: Platform.COVER,
-    UIClass.SHUTTER: Platform.COVER,
-    UIClass.SWINGING_SHUTTER: Platform.COVER,
-    UIClass.VENETIAN_BLIND: Platform.COVER,
-    UIWidget.RTS_GENERIC: Platform.COVER,  # widgetName, uiClass is Generic (not supported)
+    GarageDoor Cyclic: Ask to https://github.com/iMicknl/ha-tahoma/issues/146
     """
 
 SUPPORTED_DEVICES = {description.key: description for description in COVER_DESCRIPTIONS}
