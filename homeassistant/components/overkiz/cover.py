@@ -119,6 +119,12 @@ COVER_DESCRIPTIONS: list[OverkizCoverDescription] = [
     ),
     OverkizCoverDescription(
         key=UIClass.PERGOLA,
+        current_position_state=OverkizState.CORE_DEPLOYMENT,
+        set_position_command=OverkizCommand.SET_DEPLOYMENT,
+        open_command=OverkizCommand.DEPLOY,
+        close_command=OverkizCommand.UNDEPLOY,
+        invert_position=False,
+        is_closed_fn=is_closed,
         current_tilt_position=OverkizState.CORE_SLATE_ORIENTATION,
         set_tilt_position_command=OverkizCommand.SET_ORIENTATION,
         open_tilt_command=OverkizCommand.OPEN_SLATS,
