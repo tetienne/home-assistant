@@ -874,12 +874,26 @@ PRECIPITATION_MILLIMETERS_PER_HOUR: Final = "mm/h"
 PRECIPITATION_INCHES_PER_HOUR: Final = "in/h"
 """Deprecated: please use UnitOfVolumetricFlux.INCHES_PER_HOUR"""
 
+
 # Concentration units
 CONCENTRATION_MICROGRAMS_PER_CUBIC_METER: Final = "µg/m³"
 CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER: Final = "mg/m³"
 CONCENTRATION_MICROGRAMS_PER_CUBIC_FOOT: Final = "μg/ft³"
 CONCENTRATION_PARTS_PER_CUBIC_METER: Final = "p/m³"
+
+
+# Concentration units
+class UnitOfConcentrationParts(StrEnum):
+    PER_MILLION = "ppm"
+    PER_BILLION = "ppb"
+    PER_TRILLION = "ppt"
+    PER_QUADRILLION = "ppq"
+
+
+"""Deprecated: please use UnitOfConcentrationParts.PER_MILLION"""
 CONCENTRATION_PARTS_PER_MILLION: Final = "ppm"
+
+"""Deprecated: please use UnitOfConcentrationParts.PER_BILLION"""
 CONCENTRATION_PARTS_PER_BILLION: Final = "ppb"
 
 
