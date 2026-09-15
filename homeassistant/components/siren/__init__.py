@@ -1,24 +1,20 @@
 """Component to interface with various sirens/chimes."""
-from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import timedelta
 import logging
-from typing import Any, TypedDict, cast, final
+from typing import Any, TypedDict, cast, final, override
 
-import voluptuous as vol
+import probatio
+from propcache.api import cached_property
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import SERVICE_TOGGLE, SERVICE_TURN_OFF, SERVICE_TURN_ON
 from homeassistant.core import HomeAssistant, ServiceCall
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.config_validation import (  # noqa: F401
-    PLATFORM_SCHEMA,
-    PLATFORM_SCHEMA_BASE,
-)
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import ToggleEntity, ToggleEntityDescription
 from homeassistant.helpers.entity_component import EntityComponent
-from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.typing import ConfigType, VolDictType
+from homeassistant.util.hass_dict import HassKey
 
 from .const import (  # noqa: F401
     ATTR_AVAILABLE_TONES,
@@ -26,22 +22,21 @@ from .const import (  # noqa: F401
     ATTR_TONE,
     ATTR_VOLUME_LEVEL,
     DOMAIN,
-    SUPPORT_DURATION,
-    SUPPORT_TONES,
-    SUPPORT_TURN_OFF,
-    SUPPORT_TURN_ON,
-    SUPPORT_VOLUME_SET,
+    SirenEntityCapabilityAttribute,
     SirenEntityFeature,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
+DATA_COMPONENT: HassKey[EntityComponent[SirenEntity]] = HassKey(DOMAIN)
+PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA
+PLATFORM_SCHEMA_BASE = cv.PLATFORM_SCHEMA_BASE
 SCAN_INTERVAL = timedelta(seconds=60)
 
-TURN_ON_SCHEMA = {
-    vol.Optional(ATTR_TONE): vol.Any(vol.Coerce(int), cv.string),
-    vol.Optional(ATTR_DURATION): cv.positive_int,
-    vol.Optional(ATTR_VOLUME_LEVEL): cv.small_float,
+TURN_ON_SCHEMA: VolDictType = {
+    probatio.Optional(ATTR_TONE): probatio.Any(probatio.Coerce(int), cv.string),
+    probatio.Optional(ATTR_DURATION): cv.positive_int,
+    probatio.Optional(ATTR_VOLUME_LEVEL): cv.small_float,
 }
 
 
@@ -72,10 +67,8 @@ def process_turn_on_params(
             isinstance(siren.available_tones, dict)
             and tone in siren.available_tones.values()
         )
-        if (
-            not siren.available_tones
-            or tone not in siren.available_tones
-            and not is_tone_dict_value
+        if not siren.available_tones or (
+            tone not in siren.available_tones and not is_tone_dict_value
         ):
             raise ValueError(
                 f"Invalid tone specified for entity {siren.entity_id}: {tone}, "
@@ -100,7 +93,7 @@ def process_turn_on_params(
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up siren devices."""
-    component = hass.data[DOMAIN] = EntityComponent[SirenEntity](
+    component = hass.data[DATA_COMPONENT] = EntityComponent[SirenEntity](
         _LOGGER, DOMAIN, hass, SCAN_INTERVAL
     )
     await component.async_setup(config)
@@ -125,13 +118,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         [SirenEntityFeature.TURN_ON],
     )
     component.async_register_entity_service(
-        SERVICE_TURN_OFF, {}, "async_turn_off", [SirenEntityFeature.TURN_OFF]
+        SERVICE_TURN_OFF, None, "async_turn_off", [SirenEntityFeature.TURN_OFF]
     )
     component.async_register_entity_service(
         SERVICE_TOGGLE,
-        {},
+        None,
         "async_toggle",
-        [SirenEntityFeature.TURN_ON & SirenEntityFeature.TURN_OFF],
+        [SirenEntityFeature.TURN_ON | SirenEntityFeature.TURN_OFF],
     )
 
     return True
@@ -139,25 +132,32 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up a config entry."""
-    component: EntityComponent[SirenEntity] = hass.data[DOMAIN]
-    return await component.async_setup_entry(entry)
+    return await hass.data[DATA_COMPONENT].async_setup_entry(entry)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    component: EntityComponent[SirenEntity] = hass.data[DOMAIN]
-    return await component.async_unload_entry(entry)
+    return await hass.data[DATA_COMPONENT].async_unload_entry(entry)
 
 
-@dataclass
-class SirenEntityDescription(ToggleEntityDescription):
+class SirenEntityDescription(ToggleEntityDescription, frozen_or_thawed=True):
     """A class that describes siren entities."""
 
     available_tones: list[int | str] | dict[int, str] | None = None
 
 
-class SirenEntity(ToggleEntity):
+CACHED_PROPERTIES_WITH_ATTR_ = {
+    "available_tones",
+    "supported_features",
+}
+
+
+class SirenEntity(ToggleEntity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
     """Representation of a siren device."""
+
+    _entity_component_unrecorded_attributes = frozenset(
+        {SirenEntityCapabilityAttribute.AVAILABLE_TONES}
+    )
 
     entity_description: SirenEntityDescription
     _attr_available_tones: list[int | str] | dict[int, str] | None
@@ -165,17 +165,20 @@ class SirenEntity(ToggleEntity):
 
     @final
     @property
+    @override
     def capability_attributes(self) -> dict[str, Any] | None:
         """Return capability attributes."""
         if (
             self.supported_features & SirenEntityFeature.TONES
             and self.available_tones is not None
         ):
-            return {ATTR_AVAILABLE_TONES: self.available_tones}
+            return {
+                SirenEntityCapabilityAttribute.AVAILABLE_TONES: self.available_tones
+            }
 
         return None
 
-    @property
+    @cached_property
     def available_tones(self) -> list[int | str] | dict[int, str] | None:
         """Return a list of available tones.
 
@@ -187,7 +190,8 @@ class SirenEntity(ToggleEntity):
             return self.entity_description.available_tones
         return None
 
-    @property
+    @cached_property
+    @override
     def supported_features(self) -> SirenEntityFeature:
         """Return the list of supported features."""
         return self._attr_supported_features

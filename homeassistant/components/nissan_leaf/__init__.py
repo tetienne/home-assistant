@@ -1,5 +1,4 @@
 """Support for the Nissan Leaf Carwings/Nissan Connect API."""
-from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
@@ -8,22 +7,18 @@ import logging
 import sys
 from typing import Any, cast
 
+import probatio
 from pycarwings2 import CarwingsError, Leaf, Session
 from pycarwings2.responses import (
     CarwingsLatestBatteryStatusResponse,
     CarwingsLatestClimateControlStatusResponse,
 )
-import voluptuous as vol
 
 from homeassistant.const import CONF_PASSWORD, CONF_REGION, CONF_USERNAME, Platform
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, ServiceCall, callback
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.discovery import load_platform
-from homeassistant.helpers.dispatcher import (
-    async_dispatcher_connect,
-    async_dispatcher_send,
-)
-from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.dt import utcnow
@@ -51,52 +46,58 @@ from .const import (
     PYCARWINGS2_SLEEP,
     RESTRICTED_BATTERY,
     RESTRICTED_INTERVAL,
+    SIGNAL_UPDATE_LEAF,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.All(
+        DOMAIN: probatio.All(
             cv.ensure_list,
             [
-                vol.Schema(
+                probatio.Schema(
                     {
-                        vol.Required(CONF_USERNAME): cv.string,
-                        vol.Required(CONF_PASSWORD): cv.string,
-                        vol.Required(CONF_REGION): vol.In(CONF_VALID_REGIONS),
-                        vol.Optional(CONF_INTERVAL, default=DEFAULT_INTERVAL): (
-                            vol.All(cv.time_period, vol.Clamp(min=MIN_UPDATE_INTERVAL))
+                        probatio.Required(CONF_USERNAME): cv.string,
+                        probatio.Required(CONF_PASSWORD): cv.string,
+                        probatio.Required(CONF_REGION): probatio.In(CONF_VALID_REGIONS),
+                        probatio.Optional(CONF_INTERVAL, default=DEFAULT_INTERVAL): (
+                            probatio.All(
+                                cv.time_period, probatio.Clamp(min=MIN_UPDATE_INTERVAL)
+                            )
                         ),
-                        vol.Optional(
+                        probatio.Optional(
                             CONF_CHARGING_INTERVAL, default=DEFAULT_CHARGING_INTERVAL
                         ): (
-                            vol.All(cv.time_period, vol.Clamp(min=MIN_UPDATE_INTERVAL))
+                            probatio.All(
+                                cv.time_period, probatio.Clamp(min=MIN_UPDATE_INTERVAL)
+                            )
                         ),
-                        vol.Optional(
+                        probatio.Optional(
                             CONF_CLIMATE_INTERVAL, default=DEFAULT_CLIMATE_INTERVAL
                         ): (
-                            vol.All(cv.time_period, vol.Clamp(min=MIN_UPDATE_INTERVAL))
+                            probatio.All(
+                                cv.time_period, probatio.Clamp(min=MIN_UPDATE_INTERVAL)
+                            )
                         ),
-                        vol.Optional(CONF_FORCE_MILES, default=False): cv.boolean,
+                        probatio.Optional(CONF_FORCE_MILES, default=False): cv.boolean,
                     }
                 )
             ],
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
-PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BINARY_SENSOR, Platform.BUTTON]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
 
-SIGNAL_UPDATE_LEAF = "nissan_leaf_update"
 
 SERVICE_UPDATE_LEAF = "update"
 SERVICE_START_CHARGE_LEAF = "start_charge"
 ATTR_VIN = "vin"
 
-UPDATE_LEAF_SCHEMA = vol.Schema({vol.Required(ATTR_VIN): cv.string})
-START_CHARGE_LEAF_SCHEMA = vol.Schema({vol.Required(ATTR_VIN): cv.string})
+UPDATE_LEAF_SCHEMA = probatio.Schema({probatio.Required(ATTR_VIN): cv.string})
+START_CHARGE_LEAF_SCHEMA = probatio.Schema({probatio.Required(ATTR_VIN): cv.string})
 
 
 def setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -320,9 +321,9 @@ class LeafDataStore:
                     self.data[DATA_RANGE_AC] = None
 
                 if hasattr(server_response, "cruising_range_ac_off_km"):
-                    self.data[
-                        DATA_RANGE_AC_OFF
-                    ] = server_response.cruising_range_ac_off_km
+                    self.data[DATA_RANGE_AC_OFF] = (
+                        server_response.cruising_range_ac_off_km
+                    )
                 else:
                     self.data[DATA_RANGE_AC_OFF] = None
 
@@ -417,13 +418,13 @@ class LeafDataStore:
             server_info = await self.hass.async_add_executor_job(
                 self.leaf.get_latest_battery_status
             )
-            return server_info
         except CarwingsError:
             _LOGGER.error("An error occurred getting battery status")
             return None
-        except (KeyError, TypeError):
+        except KeyError, TypeError:
             _LOGGER.error("An error occurred parsing response from server")
             return None
+        return server_info
 
     async def async_get_climate(
         self,
@@ -495,44 +496,3 @@ class LeafDataStore:
         self._remove_listener = async_track_point_in_utc_time(
             self.hass, self.async_update_data, update_at
         )
-
-
-class LeafEntity(Entity):
-    """Base class for Nissan Leaf entity."""
-
-    def __init__(self, car: LeafDataStore) -> None:
-        """Store LeafDataStore upon init."""
-        self.car = car
-
-    def log_registration(self) -> None:
-        """Log registration."""
-        _LOGGER.debug(
-            "Registered %s integration for VIN %s",
-            self.__class__.__name__,
-            self.car.leaf.vin,
-        )
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return default attributes for Nissan leaf entities."""
-        return {
-            "next_update": self.car.next_update,
-            "last_attempt": self.car.last_check,
-            "updated_on": self.car.last_battery_response,
-            "update_in_progress": self.car.request_in_progress,
-            "vin": self.car.leaf.vin,
-        }
-
-    async def async_added_to_hass(self) -> None:
-        """Register callbacks."""
-        self.log_registration()
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.car.hass, SIGNAL_UPDATE_LEAF, self._update_callback
-            )
-        )
-
-    @callback
-    def _update_callback(self) -> None:
-        """Update the state."""
-        self.async_schedule_update_ha_state(True)

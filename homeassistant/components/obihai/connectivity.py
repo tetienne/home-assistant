@@ -1,7 +1,5 @@
 """Support for Obihai Connectivity."""
 
-from __future__ import annotations
-
 from pyobihai import PyObihai
 
 from .const import DEFAULT_PASSWORD, DEFAULT_USERNAME, LOGGER
@@ -53,14 +51,15 @@ class ObihaiConnection:
         self.line_services: list = []
         self.call_direction: list = []
         self.pyobihai: PyObihai = None
+        self.available: bool = True
 
     def update(self) -> bool:
         """Validate connection and retrieve a list of sensors."""
 
         if not self.pyobihai:
-            self.pyobihai = get_pyobihai(self.host, self.username, self.password)
+            self.pyobihai = validate_auth(self.host, self.username, self.password)
 
-            if not self.pyobihai.check_account():
+            if not self.pyobihai:
                 return False
 
         self.serial = self.pyobihai.get_device_serial()

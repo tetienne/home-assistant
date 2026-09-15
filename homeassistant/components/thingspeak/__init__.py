@@ -1,9 +1,10 @@
 """Support for submitting data to Thingspeak."""
+
 import logging
 
+import probatio
 from requests.exceptions import RequestException
 import thingspeak
-import voluptuous as vol
 
 from homeassistant.const import (
     CONF_API_KEY,
@@ -13,8 +14,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import event, state as state_helper
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv, event, state as state_helper
 from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,17 +23,17 @@ DOMAIN = "thingspeak"
 
 TIMEOUT = 5
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.Schema(
+        DOMAIN: probatio.Schema(
             {
-                vol.Required(CONF_API_KEY): cv.string,
-                vol.Required(CONF_ID): int,
-                vol.Required(CONF_WHITELIST): cv.string,
+                probatio.Required(CONF_API_KEY): cv.string,
+                probatio.Required(CONF_ID): int,
+                probatio.Required(CONF_WHITELIST): cv.string,
             }
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
 

@@ -1,4 +1,5 @@
 """Tests for the Freedompro light."""
+
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +14,8 @@ from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF, STATE_OFF, STA
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from tests.common import MockConfigEntry
+
 
 @pytest.fixture(autouse=True)
 def mock_freedompro_put_state():
@@ -21,10 +24,12 @@ def mock_freedompro_put_state():
         yield
 
 
-async def test_light_get_state(hass: HomeAssistant, init_integration) -> None:
+async def test_light_get_state(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    init_integration: MockConfigEntry,
+) -> None:
     """Test states of the light."""
-    init_integration
-    registry = er.async_get(hass)
 
     entity_id = "light.lightbulb"
     state = hass.states.get(entity_id)
@@ -32,18 +37,20 @@ async def test_light_get_state(hass: HomeAssistant, init_integration) -> None:
     assert state.state == STATE_ON
     assert state.attributes.get("friendly_name") == "lightbulb"
 
-    entry = registry.async_get(entity_id)
+    entry = entity_registry.async_get(entity_id)
     assert entry
     assert (
-        entry.unique_id
-        == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
+        entry.unique_id == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU"
+        "-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
     )
 
 
-async def test_light_set_on(hass: HomeAssistant, init_integration) -> None:
+async def test_light_set_on(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    init_integration: MockConfigEntry,
+) -> None:
     """Test set on of the light."""
-    init_integration
-    registry = er.async_get(hass)
 
     entity_id = "light.lightbulb"
     state = hass.states.get(entity_id)
@@ -51,11 +58,11 @@ async def test_light_set_on(hass: HomeAssistant, init_integration) -> None:
     assert state.state == STATE_ON
     assert state.attributes.get("friendly_name") == "lightbulb"
 
-    entry = registry.async_get(entity_id)
+    entry = entity_registry.async_get(entity_id)
     assert entry
     assert (
-        entry.unique_id
-        == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
+        entry.unique_id == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU"
+        "-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
     )
 
     await hass.services.async_call(
@@ -70,10 +77,12 @@ async def test_light_set_on(hass: HomeAssistant, init_integration) -> None:
     assert state.state == STATE_ON
 
 
-async def test_light_set_off(hass: HomeAssistant, init_integration) -> None:
+async def test_light_set_off(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    init_integration: MockConfigEntry,
+) -> None:
     """Test set off of the light."""
-    init_integration
-    registry = er.async_get(hass)
 
     entity_id = "light.bedroomlight"
     state = hass.states.get(entity_id)
@@ -81,11 +90,11 @@ async def test_light_set_off(hass: HomeAssistant, init_integration) -> None:
     assert state.state == STATE_OFF
     assert state.attributes.get("friendly_name") == "bedroomlight"
 
-    entry = registry.async_get(entity_id)
+    entry = entity_registry.async_get(entity_id)
     assert entry
     assert (
-        entry.unique_id
-        == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU-LQ*3-QURR5Q6ADA8ML1TBRG59RRGM1F9LVUZLKPYKFJQHC"
+        entry.unique_id == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU"
+        "-LQ*3-QURR5Q6ADA8ML1TBRG59RRGM1F9LVUZLKPYKFJQHC"
     )
 
     await hass.services.async_call(
@@ -100,10 +109,12 @@ async def test_light_set_off(hass: HomeAssistant, init_integration) -> None:
     assert state.state == STATE_OFF
 
 
-async def test_light_set_brightness(hass: HomeAssistant, init_integration) -> None:
+async def test_light_set_brightness(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    init_integration: MockConfigEntry,
+) -> None:
     """Test set brightness of the light."""
-    init_integration
-    registry = er.async_get(hass)
 
     entity_id = "light.lightbulb"
     state = hass.states.get(entity_id)
@@ -111,11 +122,11 @@ async def test_light_set_brightness(hass: HomeAssistant, init_integration) -> No
     assert state.state == STATE_ON
     assert state.attributes.get("friendly_name") == "lightbulb"
 
-    entry = registry.async_get(entity_id)
+    entry = entity_registry.async_get(entity_id)
     assert entry
     assert (
-        entry.unique_id
-        == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
+        entry.unique_id == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU"
+        "-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
     )
 
     await hass.services.async_call(
@@ -131,10 +142,12 @@ async def test_light_set_brightness(hass: HomeAssistant, init_integration) -> No
     assert int(state.attributes[ATTR_BRIGHTNESS]) == 0
 
 
-async def test_light_set_hue(hass: HomeAssistant, init_integration) -> None:
+async def test_light_set_hue(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    init_integration: MockConfigEntry,
+) -> None:
     """Test set brightness of the light."""
-    init_integration
-    registry = er.async_get(hass)
 
     entity_id = "light.lightbulb"
     state = hass.states.get(entity_id)
@@ -142,11 +155,11 @@ async def test_light_set_hue(hass: HomeAssistant, init_integration) -> None:
     assert state.state == STATE_ON
     assert state.attributes.get("friendly_name") == "lightbulb"
 
-    entry = registry.async_get(entity_id)
+    entry = entity_registry.async_get(entity_id)
     assert entry
     assert (
-        entry.unique_id
-        == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
+        entry.unique_id == "3WRRJR6RCZQZSND8VP0YTO3YXCSOFPKBMW8T51TU"
+        "-LQ*JHJZIZ9ORJNHB7DZNBNAOSEDECVTTZ48SABTCA3WA3M"
     )
 
     await hass.services.async_call(

@@ -1,33 +1,39 @@
 """Provide common notify constants."""
+
 import logging
+from typing import Final
 
-import voluptuous as vol
+import probatio
 
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 
 ATTR_DATA = "data"
 
 # Text to notify user of
 ATTR_MESSAGE = "message"
 
-# Target of the notification (user, device, etc)
+# Target of the (legacy) notification (user, device, etc)
 ATTR_TARGET = "target"
+
+# Recipients for a notification
+ATTR_RECIPIENTS = "recipients"
 
 # Title of notification
 ATTR_TITLE = "title"
 
-DOMAIN = "notify"
+DOMAIN: Final = "notify"
 
 LOGGER = logging.getLogger(__package__)
 
 SERVICE_NOTIFY = "notify"
+SERVICE_SEND_MESSAGE = "send_message"
 SERVICE_PERSISTENT_NOTIFICATION = "persistent_notification"
 
-NOTIFY_SERVICE_SCHEMA = vol.Schema(
+NOTIFY_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Required(ATTR_MESSAGE): cv.template,
-        vol.Optional(ATTR_TITLE): cv.template,
-        vol.Optional(ATTR_TARGET): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional(ATTR_DATA): dict,
+        probatio.Required(ATTR_MESSAGE): cv.string,
+        probatio.Optional(ATTR_TITLE): cv.string,
+        probatio.Optional(ATTR_TARGET): probatio.All(cv.ensure_list, [cv.string]),
+        probatio.Optional(ATTR_DATA): dict,
     }
 )

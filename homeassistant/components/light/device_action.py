@@ -1,7 +1,6 @@
 """Provides device actions for lights."""
-from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.device_automation import (
     async_get_entity_registry_entry_or_raise,
@@ -20,20 +19,19 @@ from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.entity import get_supported_features
-from homeassistant.helpers.typing import ConfigType, TemplateVarsType
+from homeassistant.helpers.typing import ConfigType, TemplateVarsType, VolDictType
 
 from . import (
     ATTR_BRIGHTNESS_PCT,
     ATTR_BRIGHTNESS_STEP_PCT,
     ATTR_FLASH,
-    DOMAIN,
     FLASH_SHORT,
     VALID_BRIGHTNESS_PCT,
     VALID_FLASH,
-    LightEntityFeature,
     brightness_supported,
     get_supported_color_modes,
 )
+from .const import DOMAIN, LightEntityFeature
 
 # mypy: disallow-any-generics
 
@@ -43,14 +41,18 @@ TYPE_FLASH = "flash"
 
 _ACTION_SCHEMA = cv.DEVICE_ACTION_BASE_SCHEMA.extend(
     {
-        vol.Required(ATTR_ENTITY_ID): cv.entity_id_or_uuid,
-        vol.Required(CONF_DOMAIN): DOMAIN,
-        vol.Required(CONF_TYPE): vol.In(
-            toggle_entity.DEVICE_ACTION_TYPES
-            + [TYPE_BRIGHTNESS_INCREASE, TYPE_BRIGHTNESS_DECREASE, TYPE_FLASH]
+        probatio.Required(ATTR_ENTITY_ID): cv.entity_id_or_uuid,
+        probatio.Required(CONF_DOMAIN): DOMAIN,
+        probatio.Required(CONF_TYPE): probatio.In(
+            [
+                *toggle_entity.DEVICE_ACTION_TYPES,
+                TYPE_BRIGHTNESS_INCREASE,
+                TYPE_BRIGHTNESS_DECREASE,
+                TYPE_FLASH,
+            ]
         ),
-        vol.Optional(ATTR_BRIGHTNESS_PCT): VALID_BRIGHTNESS_PCT,
-        vol.Optional(ATTR_FLASH): VALID_FLASH,
+        probatio.Optional(ATTR_BRIGHTNESS_PCT): VALID_BRIGHTNESS_PCT,
+        probatio.Optional(ATTR_FLASH): VALID_FLASH,
     }
 )
 
@@ -113,7 +115,7 @@ async def async_get_actions(
         base_action = {
             CONF_DEVICE_ID: device_id,
             CONF_DOMAIN: DOMAIN,
-            CONF_ENTITY_ID: entry.entity_id,
+            CONF_ENTITY_ID: entry.id,
         }
 
         if brightness_supported(supported_color_modes):
@@ -132,29 +134,25 @@ async def async_get_actions(
 
 async def async_get_action_capabilities(
     hass: HomeAssistant, config: ConfigType
-) -> dict[str, vol.Schema]:
+) -> dict[str, probatio.Schema]:
     """List action capabilities."""
     if config[CONF_TYPE] != toggle_entity.CONF_TURN_ON:
         return {}
 
-    entry = async_get_entity_registry_entry_or_raise(hass, config[CONF_ENTITY_ID])
-
     try:
+        entry = async_get_entity_registry_entry_or_raise(hass, config[CONF_ENTITY_ID])
         supported_color_modes = get_supported_color_modes(hass, entry.entity_id)
-    except HomeAssistantError:
-        supported_color_modes = None
-
-    try:
         supported_features = get_supported_features(hass, entry.entity_id)
     except HomeAssistantError:
+        supported_color_modes = None
         supported_features = 0
 
-    extra_fields = {}
+    extra_fields: VolDictType = {}
 
     if brightness_supported(supported_color_modes):
-        extra_fields[vol.Optional(ATTR_BRIGHTNESS_PCT)] = VALID_BRIGHTNESS_PCT
+        extra_fields[probatio.Optional(ATTR_BRIGHTNESS_PCT)] = VALID_BRIGHTNESS_PCT
 
     if supported_features & LightEntityFeature.FLASH:
-        extra_fields[vol.Optional(ATTR_FLASH)] = VALID_FLASH
+        extra_fields[probatio.Optional(ATTR_FLASH)] = VALID_FLASH
 
-    return {"extra_fields": vol.Schema(extra_fields)} if extra_fields else {}
+    return {"extra_fields": probatio.Schema(extra_fields)} if extra_fields else {}

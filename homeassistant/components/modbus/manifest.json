@@ -1,10 +1,13 @@
 {
   "domain": "modbus",
   "name": "Modbus",
-  "codeowners": ["@adamchengtkc", "@janiversen", "@vzahradnik"],
+  "codeowners": [],
   "documentation": "https://www.home-assistant.io/integrations/modbus",
   "iot_class": "local_polling",
   "loggers": ["pymodbus"],
-  "quality_scale": "gold",
-  "requirements": ["pymodbus==3.3.1"]
+  "requirements": [
+    "pymodbus==3.13.1",
+    "modbus-connection[tmodbus]==4.12.1",
+    "tmodbus==0.6.2"
+  ]
 }

@@ -1,16 +1,15 @@
 """Platform for switch integration."""
-from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from enum import Enum
+from typing import TYPE_CHECKING, Any, override
 
 from boschshcpy import (
-    SHCCamera360,
-    SHCCameraEyes,
-    SHCLightSwitch,
-    SHCSession,
+    CameraLightService,
+    PowerSwitchService,
+    PrivacyModeService,
     SHCSmartPlug,
-    SHCSmartPlugCompact,
+    ThermostatService,
 )
 from boschshcpy.device import SHCDevice
 
@@ -19,137 +18,194 @@ from homeassistant.components.switch import (
     SwitchEntity,
     SwitchEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import StateType
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DATA_SESSION, DOMAIN
+from . import BoschConfigEntry
 from .entity import SHCEntity
 
+PARALLEL_UPDATES = 1
 
-@dataclass
-class SHCSwitchRequiredKeysMixin:
-    """Mixin for SHC switch required keys."""
+
+@dataclass(frozen=True, kw_only=True)
+class SHCSwitchEntityDescription(SwitchEntityDescription):
+    """Class describing SHC switch entities."""
 
     on_key: str
-    on_value: StateType
+    on_value: bool | Enum
     should_poll: bool
-
-
-@dataclass
-class SHCSwitchEntityDescription(
-    SwitchEntityDescription,
-    SHCSwitchRequiredKeysMixin,
-):
-    """Class describing SHC switch entities."""
 
 
 SWITCH_TYPES: dict[str, SHCSwitchEntityDescription] = {
     "smartplug": SHCSwitchEntityDescription(
         key="smartplug",
         device_class=SwitchDeviceClass.OUTLET,
-        on_key="state",
-        on_value=SHCSmartPlug.PowerSwitchService.State.ON,
+        on_key="switchstate",
+        on_value=PowerSwitchService.State.ON,
         should_poll=False,
     ),
     "smartplugcompact": SHCSwitchEntityDescription(
         key="smartplugcompact",
         device_class=SwitchDeviceClass.OUTLET,
-        on_key="state",
-        on_value=SHCSmartPlugCompact.PowerSwitchService.State.ON,
+        on_key="switchstate",
+        on_value=PowerSwitchService.State.ON,
         should_poll=False,
     ),
     "lightswitch": SHCSwitchEntityDescription(
         key="lightswitch",
         device_class=SwitchDeviceClass.SWITCH,
-        on_key="state",
-        on_value=SHCLightSwitch.PowerSwitchService.State.ON,
+        on_key="switchstate",
+        on_value=PowerSwitchService.State.ON,
         should_poll=False,
     ),
     "cameraeyes": SHCSwitchEntityDescription(
         key="cameraeyes",
         device_class=SwitchDeviceClass.SWITCH,
         on_key="cameralight",
-        on_value=SHCCameraEyes.CameraLightService.State.ON,
+        on_value=CameraLightService.State.ON,
         should_poll=True,
     ),
     "camera360": SHCSwitchEntityDescription(
         key="camera360",
         device_class=SwitchDeviceClass.SWITCH,
         on_key="privacymode",
-        on_value=SHCCamera360.PrivacyModeService.State.DISABLED,
+        on_value=PrivacyModeService.State.DISABLED,
         should_poll=True,
+    ),
+    "child_lock": SHCSwitchEntityDescription(
+        key="child_lock",
+        translation_key="child_lock",
+        device_class=SwitchDeviceClass.SWITCH,
+        entity_category=EntityCategory.CONFIG,
+        on_key="child_lock",
+        on_value=True,
+        should_poll=False,
+    ),
+    "child_lock_thermostat": SHCSwitchEntityDescription(
+        key="child_lock_thermostat",
+        translation_key="child_lock",
+        device_class=SwitchDeviceClass.SWITCH,
+        entity_category=EntityCategory.CONFIG,
+        on_key="child_lock",
+        on_value=ThermostatService.State.ON,
+        should_poll=False,
     ),
 }
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: BoschConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the SHC switch platform."""
-    entities: list[SwitchEntity] = []
-    session: SHCSession = hass.data[DOMAIN][config_entry.entry_id][DATA_SESSION]
+    session = config_entry.runtime_data
 
-    for switch in session.device_helper.smart_plugs:
-        entities.append(
-            SHCSwitch(
-                device=switch,
-                parent_id=session.information.unique_id,
-                entry_id=config_entry.entry_id,
-                description=SWITCH_TYPES["smartplug"],
-            )
-        )
-        entities.append(
-            SHCRoutingSwitch(
-                device=switch,
-                parent_id=session.information.unique_id,
-                entry_id=config_entry.entry_id,
-            )
-        )
+    shc_info = session.information
+    if TYPE_CHECKING:
+        assert shc_info is not None and shc_info.unique_id is not None
 
-    for switch in session.device_helper.light_switches_bsm:
-        entities.append(
-            SHCSwitch(
-                device=switch,
-                parent_id=session.information.unique_id,
-                entry_id=config_entry.entry_id,
-                description=SWITCH_TYPES["lightswitch"],
-            )
+    entities: list[SwitchEntity] = [
+        SHCSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
+            description=SWITCH_TYPES["smartplug"],
         )
+        for switch in session.device_helper.smart_plugs
+    ]
 
-    for switch in session.device_helper.smart_plugs_compact:
-        entities.append(
-            SHCSwitch(
-                device=switch,
-                parent_id=session.information.unique_id,
-                entry_id=config_entry.entry_id,
-                description=SWITCH_TYPES["smartplugcompact"],
-            )
+    entities.extend(
+        SHCRoutingSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
         )
+        for switch in session.device_helper.smart_plugs
+    )
 
-    for switch in session.device_helper.camera_eyes:
-        entities.append(
-            SHCSwitch(
-                device=switch,
-                parent_id=session.information.unique_id,
-                entry_id=config_entry.entry_id,
-                description=SWITCH_TYPES["cameraeyes"],
-            )
+    entities.extend(
+        SHCSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
+            description=SWITCH_TYPES["lightswitch"],
         )
+        for switch in session.device_helper.light_switches_bsm
+    )
 
-    for switch in session.device_helper.camera_360:
-        entities.append(
-            SHCSwitch(
-                device=switch,
-                parent_id=session.information.unique_id,
-                entry_id=config_entry.entry_id,
-                description=SWITCH_TYPES["camera360"],
-            )
+    entities.extend(
+        SHCSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
+            description=SWITCH_TYPES["smartplugcompact"],
         )
+        for switch in session.device_helper.smart_plugs_compact
+    )
+
+    entities.extend(
+        SHCSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
+            description=SWITCH_TYPES["cameraeyes"],
+        )
+        for switch in session.device_helper.camera_eyes
+    )
+
+    entities.extend(
+        SHCSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
+            description=SWITCH_TYPES["camera360"],
+        )
+        for switch in session.device_helper.camera_360
+    )
+
+    entities.extend(
+        SHCSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
+            description=SWITCH_TYPES["child_lock_thermostat"],
+            unique_id_suffix="child_lock",
+        )
+        for switch in (
+            *session.device_helper.thermostats,
+            *session.device_helper.roomthermostats,
+            *session.device_helper.wallthermostats,
+        )
+    )
+
+    entities.extend(
+        SHCSwitch(
+            hass=hass,
+            device=switch,
+            parent_id=shc_info.unique_id,
+            entry_id=config_entry.entry_id,
+            description=SWITCH_TYPES["child_lock"],
+            unique_id_suffix="child_lock",
+        )
+        for switch in (
+            *session.device_helper.micromodule_shutter_controls,
+            *session.device_helper.micromodule_blinds,
+            *session.device_helper.micromodule_light_attached,
+            *session.device_helper.micromodule_relays,
+            *session.device_helper.micromodule_impulse_relays,
+            *session.device_helper.micromodule_dimmers,
+            *session.device_helper.light_switches_bsm,
+        )
+    )
 
     async_add_entities(entities)
 
@@ -161,32 +217,40 @@ class SHCSwitch(SHCEntity, SwitchEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
         device: SHCDevice,
         parent_id: str,
         entry_id: str,
         description: SHCSwitchEntityDescription,
+        unique_id_suffix: str | None = None,
     ) -> None:
         """Initialize a SHC switch."""
-        super().__init__(device, parent_id, entry_id)
+        super().__init__(hass, device, parent_id, entry_id)
         self.entity_description = description
+        if unique_id_suffix is not None:
+            self._attr_unique_id = f"{device.serial}_{unique_id_suffix}"
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return the state of the switch."""
         return (
             getattr(self._device, self.entity_description.on_key)
-            == self.entity_description.on_value
+            is self.entity_description.on_value
         )
 
+    @override
     def turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
         setattr(self._device, self.entity_description.on_key, True)
 
+    @override
     def turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
         setattr(self._device, self.entity_description.on_key, False)
 
     @property
+    @override
     def should_poll(self) -> bool:
         """Switch needs polling."""
         return self.entity_description.should_poll
@@ -199,24 +263,29 @@ class SHCSwitch(SHCEntity, SwitchEntity):
 class SHCRoutingSwitch(SHCEntity, SwitchEntity):
     """Representation of a SHC routing switch."""
 
-    _attr_icon = "mdi:wifi"
+    _attr_translation_key = "routing"
     _attr_entity_category = EntityCategory.CONFIG
+    _device: SHCSmartPlug
 
-    def __init__(self, device: SHCDevice, parent_id: str, entry_id: str) -> None:
-        """Initialize an SHC communication quality reporting sensor."""
-        super().__init__(device, parent_id, entry_id)
-        self._attr_name = f"{device.name} Routing"
+    def __init__(
+        self, hass: HomeAssistant, device: SHCDevice, parent_id: str, entry_id: str
+    ) -> None:
+        """Initialize an SHC routing switch."""
+        super().__init__(hass, device, parent_id, entry_id)
         self._attr_unique_id = f"{device.serial}_routing"
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return the state of the switch."""
         return self._device.routing.name == "ENABLED"
 
+    @override
     def turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
         self._device.routing = True
 
+    @override
     def turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
         self._device.routing = False

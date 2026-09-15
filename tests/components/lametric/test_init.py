@@ -1,4 +1,5 @@
 """Tests for the LaMetric integration."""
+
 from unittest.mock import MagicMock
 
 from demetriek import (
@@ -7,12 +8,36 @@ from demetriek import (
     LaMetricConnectionTimeoutError,
 )
 import pytest
+from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.lametric.const import DOMAIN
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from tests.common import MockConfigEntry
+
+
+@pytest.mark.parametrize(
+    ("device_fixture", "serial_number"),
+    [
+        ("device", "SA110405124500W00BS9"),
+        ("device_sa5", "SA52100000123TBNC"),
+    ],
+)
+async def test_device_info(
+    hass: HomeAssistant,
+    snapshot: SnapshotAssertion,
+    device_registry: dr.DeviceRegistry,
+    init_integration: MockConfigEntry,
+    serial_number: str,
+) -> None:
+    """Test the device registry entry."""
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, serial_number), init_integration.entry_id
+    )
+    assert device_entry is not None
+    assert device_entry == snapshot
 
 
 async def test_load_unload_config_entry(
@@ -73,7 +98,7 @@ async def test_config_entry_authentication_failed(
     assert len(flows) == 1
 
     flow = flows[0]
-    assert flow.get("step_id") == "choice_enter_manual_or_fetch_cloud"
+    assert flow["step_id"] == "choice_enter_manual_or_fetch_cloud"
     assert flow.get("handler") == DOMAIN
 
     assert "context" in flow

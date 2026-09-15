@@ -1,10 +1,10 @@
 """Base classes shared among Ecobee entities."""
-from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, override
 
-from homeassistant.helpers.entity import DeviceInfo, Entity
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import Entity
 
 from . import EcobeeData
 from .const import DOMAIN, ECOBEE_MODEL_TO_NAME, MANUFACTURER
@@ -14,6 +14,8 @@ _LOGGER = logging.getLogger(__name__)
 
 class EcobeeBaseEntity(Entity):
     """Base methods for Ecobee entities."""
+
+    _attr_has_entity_name = True
 
     def __init__(self, data: EcobeeData, thermostat_index: int) -> None:
         """Initiate base methods for Ecobee entities."""
@@ -34,6 +36,7 @@ class EcobeeBaseEntity(Entity):
         return self.data.ecobee.get_thermostat(self.thermostat_index)
 
     @property
+    @override
     def available(self) -> bool:
         """Return if device is available."""
         return self.thermostat["runtime"]["connected"]

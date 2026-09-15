@@ -1,7 +1,6 @@
 """Provides device automations for Cover."""
-from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.device_automation import DEVICE_TRIGGER_BASE_SCHEMA
 from homeassistant.components.homeassistant.triggers import (
@@ -18,10 +17,6 @@ from homeassistant.const import (
     CONF_PLATFORM,
     CONF_TYPE,
     CONF_VALUE_TEMPLATE,
-    STATE_CLOSED,
-    STATE_CLOSING,
-    STATE_OPEN,
-    STATE_OPENING,
 )
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 from homeassistant.helpers import config_validation as cv, entity_registry as er
@@ -29,27 +24,21 @@ from homeassistant.helpers.entity import get_supported_features
 from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 from homeassistant.helpers.typing import ConfigType
 
-from . import (
-    DOMAIN,
-    SUPPORT_CLOSE,
-    SUPPORT_OPEN,
-    SUPPORT_SET_POSITION,
-    SUPPORT_SET_TILT_POSITION,
-)
+from . import DOMAIN, CoverEntityFeature, CoverEntityStateAttribute, CoverState
 
 POSITION_TRIGGER_TYPES = {"position", "tilt_position"}
 STATE_TRIGGER_TYPES = {"opened", "closed", "opening", "closing"}
 
-POSITION_TRIGGER_SCHEMA = vol.All(
+POSITION_TRIGGER_SCHEMA = probatio.All(
     DEVICE_TRIGGER_BASE_SCHEMA.extend(
         {
-            vol.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
-            vol.Required(CONF_TYPE): vol.In(POSITION_TRIGGER_TYPES),
-            vol.Optional(CONF_ABOVE): vol.All(
-                vol.Coerce(int), vol.Range(min=0, max=100)
+            probatio.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
+            probatio.Required(CONF_TYPE): probatio.In(POSITION_TRIGGER_TYPES),
+            probatio.Optional(CONF_ABOVE): probatio.All(
+                probatio.Coerce(int), probatio.Range(min=0, max=100)
             ),
-            vol.Optional(CONF_BELOW): vol.All(
-                vol.Coerce(int), vol.Range(min=0, max=100)
+            probatio.Optional(CONF_BELOW): probatio.All(
+                probatio.Coerce(int), probatio.Range(min=0, max=100)
             ),
         }
     ),
@@ -58,13 +47,13 @@ POSITION_TRIGGER_SCHEMA = vol.All(
 
 STATE_TRIGGER_SCHEMA = DEVICE_TRIGGER_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
-        vol.Required(CONF_TYPE): vol.In(STATE_TRIGGER_TYPES),
-        vol.Optional(CONF_FOR): cv.positive_time_period_dict,
+        probatio.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
+        probatio.Required(CONF_TYPE): probatio.In(STATE_TRIGGER_TYPES),
+        probatio.Optional(CONF_FOR): cv.positive_time_period_dict,
     }
 )
 
-TRIGGER_SCHEMA = vol.Any(POSITION_TRIGGER_SCHEMA, STATE_TRIGGER_SCHEMA)
+TRIGGER_SCHEMA = probatio.Any(POSITION_TRIGGER_SCHEMA, STATE_TRIGGER_SCHEMA)
 
 
 async def async_get_triggers(
@@ -80,7 +69,9 @@ async def async_get_triggers(
             continue
 
         supported_features = get_supported_features(hass, entry.entity_id)
-        supports_open_close = supported_features & (SUPPORT_OPEN | SUPPORT_CLOSE)
+        supports_open_close = supported_features & (
+            CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
+        )
 
         # Add triggers for each entity that belongs to this integration
         base_trigger = {
@@ -98,14 +89,14 @@ async def async_get_triggers(
                 }
                 for trigger in STATE_TRIGGER_TYPES
             ]
-        if supported_features & SUPPORT_SET_POSITION:
+        if supported_features & CoverEntityFeature.SET_POSITION:
             triggers.append(
                 {
                     **base_trigger,
                     CONF_TYPE: "position",
                 }
             )
-        if supported_features & SUPPORT_SET_TILT_POSITION:
+        if supported_features & CoverEntityFeature.SET_TILT_POSITION:
             triggers.append(
                 {
                     **base_trigger,
@@ -118,23 +109,23 @@ async def async_get_triggers(
 
 async def async_get_trigger_capabilities(
     hass: HomeAssistant, config: ConfigType
-) -> dict[str, vol.Schema]:
+) -> dict[str, probatio.Schema]:
     """List trigger capabilities."""
     if config[CONF_TYPE] not in POSITION_TRIGGER_TYPES:
         return {
-            "extra_fields": vol.Schema(
-                {vol.Optional(CONF_FOR): cv.positive_time_period_dict}
+            "extra_fields": probatio.Schema(
+                {probatio.Optional(CONF_FOR): cv.positive_time_period_dict}
             )
         }
 
     return {
-        "extra_fields": vol.Schema(
+        "extra_fields": probatio.Schema(
             {
-                vol.Optional(CONF_ABOVE, default=0): vol.All(
-                    vol.Coerce(int), vol.Range(min=0, max=100)
+                probatio.Optional(CONF_ABOVE, default=0): probatio.All(
+                    probatio.Coerce(int), probatio.Range(min=0, max=100)
                 ),
-                vol.Optional(CONF_BELOW, default=100): vol.All(
-                    vol.Coerce(int), vol.Range(min=0, max=100)
+                probatio.Optional(CONF_BELOW, default=100): probatio.All(
+                    probatio.Coerce(int), probatio.Range(min=0, max=100)
                 ),
             }
         )
@@ -150,13 +141,13 @@ async def async_attach_trigger(
     """Attach a trigger."""
     if config[CONF_TYPE] in STATE_TRIGGER_TYPES:
         if config[CONF_TYPE] == "opened":
-            to_state = STATE_OPEN
+            to_state = CoverState.OPEN
         elif config[CONF_TYPE] == "closed":
-            to_state = STATE_CLOSED
+            to_state = CoverState.CLOSED
         elif config[CONF_TYPE] == "opening":
-            to_state = STATE_OPENING
+            to_state = CoverState.OPENING
         elif config[CONF_TYPE] == "closing":
-            to_state = STATE_CLOSING
+            to_state = CoverState.CLOSING
 
         state_config = {
             CONF_PLATFORM: "state",
@@ -173,9 +164,9 @@ async def async_attach_trigger(
         )
 
     if config[CONF_TYPE] == "position":
-        position = "current_position"
+        position = CoverEntityStateAttribute.CURRENT_POSITION
     if config[CONF_TYPE] == "tilt_position":
-        position = "current_tilt_position"
+        position = CoverEntityStateAttribute.CURRENT_TILT_POSITION
     min_pos = config.get(CONF_ABOVE, -1)
     max_pos = config.get(CONF_BELOW, 101)
     value_template = f"{{{{ state.attributes.{position} }}}}"

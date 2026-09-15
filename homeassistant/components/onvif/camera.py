@@ -1,11 +1,11 @@
 """Support for ONVIF Cameras with FFmpeg as decoder."""
-from __future__ import annotations
 
 import asyncio
+from typing import override
 
 from haffmpeg.camera import CameraMjpeg
 from onvif.exceptions import ONVIFError
-import voluptuous as vol
+import probatio
 from yarl import URL
 
 from homeassistant.components import ffmpeg
@@ -16,14 +16,12 @@ from homeassistant.components.stream import (
     CONF_USE_WALLCLOCK_AS_TIMESTAMPS,
     RTSP_TRANSPORTS,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import HTTP_BASIC_AUTHENTICATION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.aiohttp_client import async_aiohttp_proxy_stream
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .base import ONVIFBaseEntity
 from .const import (
     ABSOLUTE_MOVE,
     ATTR_CONTINUOUS_DURATION,
@@ -40,7 +38,6 @@ from .const import (
     DIR_LEFT,
     DIR_RIGHT,
     DIR_UP,
-    DOMAIN,
     GOTOPRESET_MOVE,
     LOGGER,
     RELATIVE_MOVE,
@@ -49,14 +46,15 @@ from .const import (
     ZOOM_IN,
     ZOOM_OUT,
 )
-from .device import ONVIFDevice
+from .device import ONVIFConfigEntry, ONVIFDevice
+from .entity import ONVIFBaseEntity
 from .models import Profile
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: ONVIFConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the ONVIF camera video stream."""
     platform = entity_platform.async_get_current_platform()
@@ -65,12 +63,12 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_PTZ,
         {
-            vol.Optional(ATTR_PAN): vol.In([DIR_LEFT, DIR_RIGHT]),
-            vol.Optional(ATTR_TILT): vol.In([DIR_UP, DIR_DOWN]),
-            vol.Optional(ATTR_ZOOM): vol.In([ZOOM_OUT, ZOOM_IN]),
-            vol.Optional(ATTR_DISTANCE, default=0.1): cv.small_float,
-            vol.Optional(ATTR_SPEED, default=0.5): cv.small_float,
-            vol.Optional(ATTR_MOVE_MODE, default=RELATIVE_MOVE): vol.In(
+            probatio.Optional(ATTR_PAN): probatio.In([DIR_LEFT, DIR_RIGHT]),
+            probatio.Optional(ATTR_TILT): probatio.In([DIR_UP, DIR_DOWN]),
+            probatio.Optional(ATTR_ZOOM): probatio.In([ZOOM_OUT, ZOOM_IN]),
+            probatio.Optional(ATTR_DISTANCE, default=0.1): cv.small_float,
+            probatio.Optional(ATTR_SPEED): cv.small_float,
+            probatio.Optional(ATTR_MOVE_MODE, default=RELATIVE_MOVE): probatio.In(
                 [
                     CONTINUOUS_MOVE,
                     RELATIVE_MOVE,
@@ -79,13 +77,13 @@ async def async_setup_entry(
                     STOP_MOVE,
                 ]
             ),
-            vol.Optional(ATTR_CONTINUOUS_DURATION, default=0.5): cv.small_float,
-            vol.Optional(ATTR_PRESET, default="0"): cv.string,
+            probatio.Optional(ATTR_CONTINUOUS_DURATION, default=0.5): cv.small_float,
+            probatio.Optional(ATTR_PRESET, default="0"): cv.string,
         },
         "async_perform_ptz",
     )
 
-    device = hass.data[DOMAIN][config_entry.unique_id]
+    device = config_entry.runtime_data
     async_add_entities(
         [ONVIFCameraEntity(device, profile) for profile in device.profiles]
     )
@@ -104,44 +102,37 @@ class ONVIFCameraEntity(ONVIFBaseEntity, Camera):
         self.stream_options[CONF_RTSP_TRANSPORT] = device.config_entry.options.get(
             CONF_RTSP_TRANSPORT, next(iter(RTSP_TRANSPORTS))
         )
-        self.stream_options[
-            CONF_USE_WALLCLOCK_AS_TIMESTAMPS
-        ] = device.config_entry.options.get(CONF_USE_WALLCLOCK_AS_TIMESTAMPS, False)
+        self.stream_options[CONF_USE_WALLCLOCK_AS_TIMESTAMPS] = (
+            device.config_entry.options.get(CONF_USE_WALLCLOCK_AS_TIMESTAMPS, False)
+        )
         self._basic_auth = (
             device.config_entry.data.get(CONF_SNAPSHOT_AUTH)
             == HTTP_BASIC_AUTHENTICATION
         )
         self._stream_uri: str | None = None
         self._stream_uri_future: asyncio.Future[str] | None = None
+        self._attr_entity_registry_enabled_default = (
+            device.max_resolution == profile.video.resolution.width
+        )
+        self._attr_unique_id = f"{self.mac_or_serial}#{profile.token}"
+        self._attr_name = f"{device.name} {profile.name}"
 
     @property
-    def name(self) -> str:
-        """Return the name of this camera."""
-        return f"{self.device.name} {self.profile.name}"
+    @override
+    def use_stream_for_stills(self) -> bool:
+        """Whether or not to use stream to generate stills."""
+        return bool(self.stream and self.stream.dynamic_stream_settings.preload_stream)
 
-    @property
-    def unique_id(self) -> str:
-        """Return a unique ID."""
-        if self.profile.index:
-            return f"{self.mac_or_serial}_{self.profile.index}"
-        return self.mac_or_serial
-
-    @property
-    def entity_registry_enabled_default(self) -> bool:
-        """Return if the entity should be enabled when first added to the entity registry."""
-        return self.device.max_resolution == self.profile.video.resolution.width
-
+    @override
     async def stream_source(self):
         """Return the stream source."""
         return await self._async_get_stream_uri()
 
+    @override
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Return a still image response from the camera."""
-
-        if self.stream and self.stream.dynamic_stream_settings.preload_stream:
-            return await self.stream.async_get_image(width, height)
 
         if self.device.capabilities.snapshot:
             try:
@@ -149,6 +140,7 @@ class ONVIFCameraEntity(ONVIFBaseEntity, Camera):
                     self.profile.token, self._basic_auth
                 ):
                     return image
+            # pylint: disable-next=home-assistant-action-swallowed-exception
             except ONVIFError as err:
                 LOGGER.error(
                     "Fetch snapshot image failed from %s, falling back to FFmpeg; %s",
@@ -170,6 +162,7 @@ class ONVIFCameraEntity(ONVIFBaseEntity, Camera):
             height=height,
         )
 
+    @override
     async def handle_async_mjpeg_stream(self, request):
         """Generate an HTTP MJPEG stream from the camera."""
         LOGGER.debug("Handling mjpeg stream from camera '%s'", self.device.name)
@@ -204,7 +197,7 @@ class ONVIFCameraEntity(ONVIFBaseEntity, Camera):
         self._stream_uri_future = loop.create_future()
         try:
             uri_no_auth = await self.device.async_get_stream_uri(self.profile)
-        except (asyncio.TimeoutError, Exception) as err:
+        except (TimeoutError, Exception) as err:
             LOGGER.error("Failed to get stream uri: %s", err)
             if self._stream_uri_future:
                 self._stream_uri_future.set_exception(err)
@@ -219,10 +212,10 @@ class ONVIFCameraEntity(ONVIFBaseEntity, Camera):
     async def async_perform_ptz(
         self,
         distance,
-        speed,
         move_mode,
         continuous_duration,
         preset,
+        speed=None,
         pan=None,
         tilt=None,
         zoom=None,

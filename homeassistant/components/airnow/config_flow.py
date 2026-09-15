@@ -1,21 +1,29 @@
 """Config flow for AirNow integration."""
+
 import logging
+from typing import Any, override
 
+import probatio
 from pyairnow import WebServiceAPI
-from pyairnow.errors import AirNowError, InvalidKeyError
-import voluptuous as vol
+from pyairnow.errors import AirNowError, EmptyResponseError, InvalidKeyError
 
-from homeassistant import config_entries, core, exceptions
-from homeassistant.const import CONF_API_KEY, CONF_LATITUDE, CONF_LONGITUDE, CONF_RADIUS
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.const import CONF_API_KEY, CONF_LATITUDE, CONF_LONGITUDE
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def validate_input(hass: core.HomeAssistant, data):
+# Documentation URL for API key generation
+_API_KEY_URL = "https://docs.airnowapi.org/account/request/"
+
+
+async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> bool:
     """Validate the user input allows us to connect.
 
     Data has the keys from DATA_SCHEMA with values provided by the user.
@@ -25,16 +33,17 @@ async def validate_input(hass: core.HomeAssistant, data):
 
     lat = data[CONF_LATITUDE]
     lng = data[CONF_LONGITUDE]
-    distance = data[CONF_RADIUS]
 
     # Check that the provided latitude/longitude provide a response
     try:
-        test_data = await client.observations.latLong(lat, lng, distance=distance)
+        test_data = await client.observations.latLong(lat, lng)
 
     except InvalidKeyError as exc:
         raise InvalidAuth from exc
     except AirNowError as exc:
         raise CannotConnect from exc
+    except EmptyResponseError as exc:
+        raise InvalidLocation from exc
 
     if not test_data:
         raise InvalidLocation
@@ -43,12 +52,15 @@ async def validate_input(hass: core.HomeAssistant, data):
     return True
 
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class AirNowConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for AirNow."""
 
-    VERSION = 1
+    VERSION = 3
 
-    async def async_step_user(self, user_input=None):
+    @override
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
         errors = {}
         if user_input is not None:
@@ -68,7 +80,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_auth"
             except InvalidLocation:
                 errors["base"] = "invalid_location"
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
             else:
@@ -83,29 +95,29 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(CONF_API_KEY): str,
-                    vol.Optional(
+                    probatio.Required(CONF_API_KEY): str,
+                    probatio.Optional(
                         CONF_LATITUDE, default=self.hass.config.latitude
                     ): cv.latitude,
-                    vol.Optional(
+                    probatio.Optional(
                         CONF_LONGITUDE, default=self.hass.config.longitude
                     ): cv.longitude,
-                    vol.Optional(CONF_RADIUS, default=150): int,
                 }
             ),
+            description_placeholders={"api_key_url": _API_KEY_URL},
             errors=errors,
         )
 
 
-class CannotConnect(exceptions.HomeAssistantError):
+class CannotConnect(HomeAssistantError):
     """Error to indicate we cannot connect."""
 
 
-class InvalidAuth(exceptions.HomeAssistantError):
+class InvalidAuth(HomeAssistantError):
     """Error to indicate there is invalid auth."""
 
 
-class InvalidLocation(exceptions.HomeAssistantError):
+class InvalidLocation(HomeAssistantError):
     """Error to indicate the location is invalid."""

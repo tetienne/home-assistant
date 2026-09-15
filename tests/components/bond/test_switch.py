@@ -1,12 +1,13 @@
 """Tests for the Bond switch device."""
+
 from datetime import timedelta
 
 from bond_async import Action, DeviceType
 import pytest
 
-from homeassistant.components.bond.const import (
+from homeassistant.components.bond.const import DOMAIN
+from homeassistant.components.bond.services import (
     ATTR_POWER_STATE,
-    DOMAIN as BOND_DOMAIN,
     SERVICE_SET_POWER_TRACKED_STATE,
 )
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
@@ -14,7 +15,6 @@ from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF, SERVICE_TURN_O
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.entity_registry import EntityRegistry
 from homeassistant.util import utcnow
 
 from .common import (
@@ -33,7 +33,10 @@ def generic_device(name: str):
     return {"name": name, "type": DeviceType.GENERIC_DEVICE}
 
 
-async def test_entity_registry(hass: HomeAssistant) -> None:
+async def test_entity_registry(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+) -> None:
     """Tests that the devices are registered in the entity registry."""
     await setup_platform(
         hass,
@@ -43,8 +46,7 @@ async def test_entity_registry(hass: HomeAssistant) -> None:
         bond_device_id="test-device-id",
     )
 
-    registry: EntityRegistry = er.async_get(hass)
-    entity = registry.entities["switch.name_1"]
+    entity = entity_registry.entities["switch.name_1"]
     assert entity.unique_id == "test-hub-id_test-device-id"
 
 
@@ -92,7 +94,7 @@ async def test_switch_set_power_belief(hass: HomeAssistant) -> None:
 
     with patch_bond_action() as mock_bond_action, patch_bond_device_state():
         await hass.services.async_call(
-            BOND_DOMAIN,
+            DOMAIN,
             SERVICE_SET_POWER_TRACKED_STATE,
             {ATTR_ENTITY_ID: "switch.name_1", ATTR_POWER_STATE: False},
             blocking=True,
@@ -105,25 +107,26 @@ async def test_switch_set_power_belief(hass: HomeAssistant) -> None:
 
 
 async def test_switch_set_power_belief_api_error(hass: HomeAssistant) -> None:
-    """Tests that the set power belief service throws HomeAssistantError in the event of an api error."""
+    """Tests that set power belief throws HomeAssistantError on api error."""
     await setup_platform(
         hass, SWITCH_DOMAIN, generic_device("name-1"), bond_device_id="test-device-id"
     )
 
-    with pytest.raises(
-        HomeAssistantError
-    ), patch_bond_action_returns_clientresponseerror(), patch_bond_device_state():
+    with (
+        pytest.raises(HomeAssistantError),
+        patch_bond_action_returns_clientresponseerror(),
+        patch_bond_device_state(),
+    ):
         await hass.services.async_call(
-            BOND_DOMAIN,
+            DOMAIN,
             SERVICE_SET_POWER_TRACKED_STATE,
             {ATTR_ENTITY_ID: "switch.name_1", ATTR_POWER_STATE: False},
             blocking=True,
         )
-        await hass.async_block_till_done()
 
 
 async def test_update_reports_switch_is_on(hass: HomeAssistant) -> None:
-    """Tests that update command sets correct state when Bond API reports the device is on."""
+    """Tests that update sets correct state when Bond API reports device is on."""
     await setup_platform(hass, SWITCH_DOMAIN, generic_device("name-1"))
 
     with patch_bond_device_state(return_value={"power": 1}):
@@ -134,7 +137,7 @@ async def test_update_reports_switch_is_on(hass: HomeAssistant) -> None:
 
 
 async def test_update_reports_switch_is_off(hass: HomeAssistant) -> None:
-    """Tests that update command sets correct state when Bond API reports the device is off."""
+    """Tests that update sets correct state when Bond API reports device is off."""
     await setup_platform(hass, SWITCH_DOMAIN, generic_device("name-1"))
 
     with patch_bond_device_state(return_value={"power": 0}):

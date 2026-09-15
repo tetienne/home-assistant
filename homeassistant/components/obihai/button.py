@@ -1,20 +1,18 @@
 """Obihai button module."""
 
-from __future__ import annotations
-
-from pyobihai import PyObihai
+from typing import override
 
 from homeassistant.components.button import (
     ButtonDeviceClass,
     ButtonEntity,
     ButtonEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, EntityCategory
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_platform
 
+from . import ObihaiConfigEntry
 from .connectivity import ObihaiConnection
 from .const import OBIHAI
 
@@ -28,17 +26,14 @@ BUTTON_DESCRIPTION = ButtonEntityDescription(
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: entity_platform.AddEntitiesCallback,
+    entry: ObihaiConfigEntry,
+    async_add_entities: entity_platform.AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the Obihai sensor entries."""
-    username = entry.data[CONF_USERNAME]
-    password = entry.data[CONF_PASSWORD]
-    host = entry.data[CONF_HOST]
-    requester = ObihaiConnection(host, username, password)
+    """Set up the Obihai button entries."""
 
-    await hass.async_add_executor_job(requester.update)
-    buttons = [ObihaiButton(requester.pyobihai, requester.serial)]
+    requester = entry.runtime_data
+
+    buttons = [ObihaiButton(requester)]
     async_add_entities(buttons, update_before_add=True)
 
 
@@ -47,11 +42,13 @@ class ObihaiButton(ButtonEntity):
 
     entity_description = BUTTON_DESCRIPTION
 
-    def __init__(self, pyobihai: PyObihai, serial: str) -> None:
+    def __init__(self, requester: ObihaiConnection) -> None:
         """Initialize monitor sensor."""
-        self._pyobihai = pyobihai
-        self._attr_unique_id = f"{serial}-reboot"
+        self.requester = requester
+        self._pyobihai = requester.pyobihai
+        self._attr_unique_id = f"{requester.serial}-reboot"
 
+    @override
     def press(self) -> None:
         """Press button."""
 

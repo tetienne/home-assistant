@@ -1,9 +1,9 @@
 """Provides device actions for Humidifier."""
-from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.device_automation import (
+    async_get_entity_registry_entry_or_raise,
     async_validate_entity_schema,
     toggle_entity,
 )
@@ -17,10 +17,9 @@ from homeassistant.const import (
 )
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_registry as er
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.entity import get_capability, get_supported_features
-from homeassistant.helpers.typing import ConfigType, TemplateVarsType
+from homeassistant.helpers.typing import ConfigType, TemplateVarsType, VolDictType
 
 from . import DOMAIN, const
 
@@ -28,23 +27,25 @@ from . import DOMAIN, const
 
 SET_HUMIDITY_SCHEMA = cv.DEVICE_ACTION_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_TYPE): "set_humidity",
-        vol.Required(CONF_ENTITY_ID): cv.entity_domain(DOMAIN),
-        vol.Required(const.ATTR_HUMIDITY): vol.Coerce(int),
+        probatio.Required(CONF_TYPE): "set_humidity",
+        probatio.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
+        probatio.Required(const.ATTR_HUMIDITY): probatio.Coerce(int),
     }
 )
 
 SET_MODE_SCHEMA = cv.DEVICE_ACTION_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_TYPE): "set_mode",
-        vol.Required(CONF_ENTITY_ID): cv.entity_domain(DOMAIN),
-        vol.Required(ATTR_MODE): cv.string,
+        probatio.Required(CONF_TYPE): "set_mode",
+        probatio.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
+        probatio.Required(ATTR_MODE): cv.string,
     }
 )
 
-ONOFF_SCHEMA = toggle_entity.ACTION_SCHEMA.extend({vol.Required(CONF_DOMAIN): DOMAIN})
+ONOFF_SCHEMA = toggle_entity.ACTION_SCHEMA.extend(
+    {probatio.Required(CONF_DOMAIN): DOMAIN}
+)
 
-_ACTION_SCHEMA = vol.Any(SET_HUMIDITY_SCHEMA, SET_MODE_SCHEMA, ONOFF_SCHEMA)
+_ACTION_SCHEMA = probatio.Any(SET_HUMIDITY_SCHEMA, SET_MODE_SCHEMA, ONOFF_SCHEMA)
 
 
 async def async_validate_action_config(
@@ -71,7 +72,7 @@ async def async_get_actions(
         base_action = {
             CONF_DEVICE_ID: device_id,
             CONF_DOMAIN: DOMAIN,
-            CONF_ENTITY_ID: entry.entity_id,
+            CONF_ENTITY_ID: entry.id,
         }
         actions.append({**base_action, CONF_TYPE: "set_humidity"})
 
@@ -97,9 +98,10 @@ async def async_call_action_from_config(
         service = const.SERVICE_SET_MODE
         service_data[ATTR_MODE] = config[ATTR_MODE]
     else:
-        return await toggle_entity.async_call_action_from_config(
+        await toggle_entity.async_call_action_from_config(
             hass, config, variables, context, DOMAIN
         )
+        return
 
     await hass.services.async_call(
         DOMAIN, service, service_data, blocking=True, context=context
@@ -108,24 +110,31 @@ async def async_call_action_from_config(
 
 async def async_get_action_capabilities(
     hass: HomeAssistant, config: ConfigType
-) -> dict[str, vol.Schema]:
+) -> dict[str, probatio.Schema]:
     """List action capabilities."""
     action_type = config[CONF_TYPE]
 
-    fields = {}
+    fields: VolDictType = {}
 
     if action_type == "set_humidity":
-        fields[vol.Required(const.ATTR_HUMIDITY)] = vol.Coerce(int)
+        fields[probatio.Required(const.ATTR_HUMIDITY)] = probatio.Coerce(int)
     elif action_type == "set_mode":
         try:
+            entry = async_get_entity_registry_entry_or_raise(
+                hass, config[CONF_ENTITY_ID]
+            )
             available_modes = (
-                get_capability(hass, config[ATTR_ENTITY_ID], const.ATTR_AVAILABLE_MODES)
+                get_capability(
+                    hass,
+                    entry.entity_id,
+                    const.HumidifierEntityCapabilityAttribute.AVAILABLE_MODES,
+                )
                 or []
             )
         except HomeAssistantError:
             available_modes = []
-        fields[vol.Required(ATTR_MODE)] = vol.In(available_modes)
+        fields[probatio.Required(ATTR_MODE)] = probatio.In(available_modes)
     else:
         return {}
 
-    return {"extra_fields": vol.Schema(fields)}
+    return {"extra_fields": probatio.Schema(fields)}

@@ -1,5 +1,4 @@
 """Meteoclimatic component constants."""
-from __future__ import annotations
 
 from datetime import timedelta
 
@@ -53,4 +52,9 @@ CONDITION_CLASSES = {
     ATTR_CONDITION_SUNNY: [Condition.sun],
     ATTR_CONDITION_WINDY: [],
     ATTR_CONDITION_WINDY_VARIANT: [],
+}
+CONDITION_MAP = {
+    cond_code: cond_ha
+    for cond_ha, cond_codes in CONDITION_CLASSES.items()
+    for cond_code in cond_codes
 }

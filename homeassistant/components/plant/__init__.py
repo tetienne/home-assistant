@@ -1,15 +1,20 @@
-"""Support for monitoring plants."""
+"""Support for monitoring plants.
+
+DEVELOPMENT OF THE PLANT INTEGRATION IS FROZEN
+PENDING A DESIGN EVALUATION.
+"""
+
 from collections import deque
 from contextlib import suppress
 from datetime import datetime, timedelta
 import logging
+from typing import Any, override
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.recorder import get_instance, history
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
-    CONDUCTIVITY,
     CONF_SENSORS,
     LIGHT_LUX,
     PERCENTAGE,
@@ -17,11 +22,19 @@ from homeassistant.const import (
     STATE_PROBLEM,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    EntityStateAttribute,
+    UnitOfConductivity,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.exceptions import HomeAssistantError
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.event import async_track_state_change_event
@@ -67,39 +80,45 @@ CONF_SENSOR_TEMPERATURE = READING_TEMPERATURE
 CONF_SENSOR_BRIGHTNESS = READING_BRIGHTNESS
 
 
-SCHEMA_SENSORS = vol.Schema(
+SCHEMA_SENSORS = probatio.Schema(
     {
-        vol.Optional(CONF_SENSOR_BATTERY_LEVEL): cv.entity_id,
-        vol.Optional(CONF_SENSOR_MOISTURE): cv.entity_id,
-        vol.Optional(CONF_SENSOR_CONDUCTIVITY): cv.entity_id,
-        vol.Optional(CONF_SENSOR_TEMPERATURE): cv.entity_id,
-        vol.Optional(CONF_SENSOR_BRIGHTNESS): cv.entity_id,
+        probatio.Optional(CONF_SENSOR_BATTERY_LEVEL): cv.entity_id,
+        probatio.Optional(CONF_SENSOR_MOISTURE): cv.entity_id,
+        probatio.Optional(CONF_SENSOR_CONDUCTIVITY): cv.entity_id,
+        probatio.Optional(CONF_SENSOR_TEMPERATURE): cv.entity_id,
+        probatio.Optional(CONF_SENSOR_BRIGHTNESS): cv.entity_id,
     }
 )
 
-PLANT_SCHEMA = vol.Schema(
+PLANT_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_SENSORS): vol.Schema(SCHEMA_SENSORS),
-        vol.Optional(
+        probatio.Required(CONF_SENSORS): probatio.Schema(SCHEMA_SENSORS),
+        probatio.Optional(
             CONF_MIN_BATTERY_LEVEL, default=DEFAULT_MIN_BATTERY_LEVEL
         ): cv.positive_int,
-        vol.Optional(CONF_MIN_TEMPERATURE): vol.Coerce(float),
-        vol.Optional(CONF_MAX_TEMPERATURE): vol.Coerce(float),
-        vol.Optional(CONF_MIN_MOISTURE, default=DEFAULT_MIN_MOISTURE): cv.positive_int,
-        vol.Optional(CONF_MAX_MOISTURE, default=DEFAULT_MAX_MOISTURE): cv.positive_int,
-        vol.Optional(
+        probatio.Optional(CONF_MIN_TEMPERATURE): probatio.Coerce(float),
+        probatio.Optional(CONF_MAX_TEMPERATURE): probatio.Coerce(float),
+        probatio.Optional(
+            CONF_MIN_MOISTURE, default=DEFAULT_MIN_MOISTURE
+        ): cv.positive_int,
+        probatio.Optional(
+            CONF_MAX_MOISTURE, default=DEFAULT_MAX_MOISTURE
+        ): cv.positive_int,
+        probatio.Optional(
             CONF_MIN_CONDUCTIVITY, default=DEFAULT_MIN_CONDUCTIVITY
         ): cv.positive_int,
-        vol.Optional(
+        probatio.Optional(
             CONF_MAX_CONDUCTIVITY, default=DEFAULT_MAX_CONDUCTIVITY
         ): cv.positive_int,
-        vol.Optional(CONF_MIN_BRIGHTNESS): cv.positive_int,
-        vol.Optional(CONF_MAX_BRIGHTNESS): cv.positive_int,
-        vol.Optional(CONF_CHECK_DAYS, default=DEFAULT_CHECK_DAYS): cv.positive_int,
+        probatio.Optional(CONF_MIN_BRIGHTNESS): cv.positive_int,
+        probatio.Optional(CONF_MAX_BRIGHTNESS): cv.positive_int,
+        probatio.Optional(CONF_CHECK_DAYS, default=DEFAULT_CHECK_DAYS): cv.positive_int,
     }
 )
 
-CONFIG_SCHEMA = vol.Schema({DOMAIN: {cv.string: PLANT_SCHEMA}}, extra=vol.ALLOW_EXTRA)
+CONFIG_SCHEMA = probatio.Schema(
+    {DOMAIN: {cv.string: PLANT_SCHEMA}}, extra=probatio.ALLOW_EXTRA
+)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -121,6 +140,9 @@ class Plant(Entity):
 
     It also checks the measurements against
     configurable min and max values.
+
+    DEVELOPMENT OF THE PLANT INTEGRATION IS FROZEN
+    PENDING A DESIGN EVALUATION.
     """
 
     _attr_should_poll = False
@@ -141,7 +163,7 @@ class Plant(Entity):
             "max": CONF_MAX_MOISTURE,
         },
         READING_CONDUCTIVITY: {
-            ATTR_UNIT_OF_MEASUREMENT: CONDUCTIVITY,
+            ATTR_UNIT_OF_MEASUREMENT: UnitOfConductivity.MICROSIEMENS_PER_CM,
             "min": CONF_MIN_CONDUCTIVITY,
             "max": CONF_MAX_CONDUCTIVITY,
         },
@@ -176,15 +198,16 @@ class Plant(Entity):
         self._brightness_history = DailyHistory(self._conf_check_days)
 
     @callback
-    def _state_changed_event(self, event):
+    def _state_changed_event(self, event: Event[EventStateChangedData]) -> None:
         """Sensor state change event."""
-        self.state_changed(event.data.get("entity_id"), event.data.get("new_state"))
+        self.state_changed(event.data["entity_id"], event.data["new_state"])
 
     @callback
-    def state_changed(self, entity_id, new_state):
+    def state_changed(self, entity_id: str, new_state: State | None) -> None:
         """Update the sensor status."""
         if new_state is None:
             return
+        value: str | float
         value = new_state.state
         _LOGGER.debug("Received callback from %s with value %s", entity_id, value)
         if value == STATE_UNKNOWN:
@@ -218,9 +241,9 @@ class Plant(Entity):
             raise HomeAssistantError(
                 f"Unknown reading from sensor {entity_id}: {value}"
             )
-        if ATTR_UNIT_OF_MEASUREMENT in new_state.attributes:
+        if EntityStateAttribute.UNIT_OF_MEASUREMENT in new_state.attributes:
             self._unit_of_measurement[reading] = new_state.attributes.get(
-                ATTR_UNIT_OF_MEASUREMENT
+                EntityStateAttribute.UNIT_OF_MEASUREMENT
             )
         self._update_state()
 
@@ -260,6 +283,7 @@ class Plant(Entity):
             min_value = self._config[params["min"]]
             if value < min_value:
                 return f"{sensor_name} low"
+        return None
 
     def _check_max(self, sensor_name, value, params):
         """If configured, check the value against the defined maximum value."""
@@ -269,6 +293,7 @@ class Plant(Entity):
                 return f"{sensor_name} high"
         return None
 
+    @override
     async def async_added_to_hass(self):
         """After being added to hass, load from history."""
         if "recorder" in self.hass.config.components:
@@ -319,17 +344,20 @@ class Plant(Entity):
         _LOGGER.debug("Initializing from database completed")
 
     @property
+    @override
     def name(self):
         """Return the name of the sensor."""
         return self._name
 
     @property
+    @override
     def state(self):
         """Return the state of the entity."""
         return self._state
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return the attributes of the entity.
 
         Provide the individual measurements from the
@@ -354,6 +382,9 @@ class DailyHistory:
     """Stores one measurement per day for a maximum number of days.
 
     At the moment only the maximum value per day is kept.
+
+    DEVELOPMENT OF THE PLANT INTEGRATION IS FROZEN
+    PENDING A DESIGN EVALUATION.
     """
 
     def __init__(self, max_length):
@@ -365,7 +396,7 @@ class DailyHistory:
 
     def add_measurement(self, value, timestamp=None):
         """Add a new measurement for a certain day."""
-        day = (timestamp or datetime.now()).date()
+        day = (timestamp or datetime.now()).date()  # pylint: disable=home-assistant-enforce-naive-now
         if not isinstance(value, (int, float)):
             return
         if self._days is None:

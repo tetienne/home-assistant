@@ -1,40 +1,35 @@
 """Support for EufyLife sensors."""
-from __future__ import annotations
 
-from typing import Any
+from typing import Any, override
 
 from eufylife_ble_client import MODEL_TO_NAME
 
-from homeassistant import config_entries
 from homeassistant.components.bluetooth import async_address_present
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import (
-    ATTR_UNIT_OF_MEASUREMENT,
-    STATE_UNAVAILABLE,
-    STATE_UNKNOWN,
-    UnitOfMass,
+from homeassistant.components.sensor import (
+    RestoreSensor,
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
 )
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfMass
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.util.unit_conversion import MassConverter
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
-from .const import DOMAIN
-from .models import EufyLifeData
+from .models import EufyLifeConfigEntry, EufyLifeData
 
 IGNORED_STATES = {STATE_UNAVAILABLE, STATE_UNKNOWN}
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: config_entries.ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: EufyLifeConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the EufyLife sensors."""
-    data: EufyLifeData = hass.data[DOMAIN][entry.entry_id]
+    data = entry.runtime_data
 
     entities = [
         EufyLifeWeightSensorEntity(data),
@@ -51,6 +46,7 @@ class EufyLifeSensorEntity(SensorEntity):
     """Representation of an EufyLife sensor."""
 
     _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, data: EufyLifeData) -> None:
         """Initialize the weight sensor entity."""
@@ -62,13 +58,16 @@ class EufyLifeSensorEntity(SensorEntity):
         )
 
     @property
+    @override
     def available(self) -> bool:
         """Determine if the entity is available."""
         if self._data.client.advertisement_data_contains_state:
-            # If the device only uses advertisement data, just check if the address is present.
+            # If the device only uses advertisement data,
+            # just check if the address is present.
             return async_address_present(self.hass, self._data.address)
 
-        # If the device needs an active connection, availability is based on whether it is connected.
+        # If the device needs an active connection,
+        # availability is based on whether it is connected.
         return self._data.client.is_connected
 
     @callback
@@ -76,6 +75,7 @@ class EufyLifeSensorEntity(SensorEntity):
         """Handle state update."""
         self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Register callback."""
         self.async_on_remove(
@@ -86,7 +86,7 @@ class EufyLifeSensorEntity(SensorEntity):
 class EufyLifeRealTimeWeightSensorEntity(EufyLifeSensorEntity):
     """Representation of an EufyLife real-time weight sensor."""
 
-    _attr_name = "Real-time weight"
+    _attr_translation_key = "real_time_weight"
     _attr_native_unit_of_measurement = UnitOfMass.KILOGRAMS
     _attr_device_class = SensorDeviceClass.WEIGHT
 
@@ -96,6 +96,7 @@ class EufyLifeRealTimeWeightSensorEntity(EufyLifeSensorEntity):
         self._attr_unique_id = f"{data.address}_real_time_weight"
 
     @property
+    @override
     def native_value(self) -> float | None:
         """Return the native value."""
         if self._data.client.state is not None:
@@ -103,6 +104,7 @@ class EufyLifeRealTimeWeightSensorEntity(EufyLifeSensorEntity):
         return None
 
     @property
+    @override
     def suggested_unit_of_measurement(self) -> str | None:
         """Set the suggested unit based on the unit system."""
         if self.hass.config.units is US_CUSTOMARY_SYSTEM:
@@ -111,15 +113,12 @@ class EufyLifeRealTimeWeightSensorEntity(EufyLifeSensorEntity):
         return UnitOfMass.KILOGRAMS
 
 
-# pylint: disable-next=hass-invalid-inheritance # needs fixing
-class EufyLifeWeightSensorEntity(RestoreEntity, EufyLifeSensorEntity):
+class EufyLifeWeightSensorEntity(RestoreSensor, EufyLifeSensorEntity):
     """Representation of an EufyLife weight sensor."""
 
-    _attr_name = "Weight"
+    _attr_translation_key = "weight"
     _attr_native_unit_of_measurement = UnitOfMass.KILOGRAMS
     _attr_device_class = SensorDeviceClass.WEIGHT
-
-    _weight_kg: float | None = None
 
     def __init__(self, data: EufyLifeData) -> None:
         """Initialize the weight sensor entity."""
@@ -127,16 +126,13 @@ class EufyLifeWeightSensorEntity(RestoreEntity, EufyLifeSensorEntity):
         self._attr_unique_id = f"{data.address}_weight"
 
     @property
+    @override
     def available(self) -> bool:
         """Determine if the entity is available."""
         return True
 
     @property
-    def native_value(self) -> float | None:
-        """Return the native value."""
-        return self._weight_kg
-
-    @property
+    @override
     def suggested_unit_of_measurement(self) -> str | None:
         """Set the suggested unit based on the unit system."""
         if self.hass.config.units is US_CUSTOMARY_SYSTEM:
@@ -145,42 +141,34 @@ class EufyLifeWeightSensorEntity(RestoreEntity, EufyLifeSensorEntity):
         return UnitOfMass.KILOGRAMS
 
     @callback
+    @override
     def _handle_state_update(self, *args: Any) -> None:
         """Handle state update."""
         state = self._data.client.state
         if state is not None and state.final_weight_kg is not None:
-            self._weight_kg = state.final_weight_kg
+            self._attr_native_value = state.final_weight_kg
 
         super()._handle_state_update(args)
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Restore state on startup."""
         await super().async_added_to_hass()
 
         last_state = await self.async_get_last_state()
-        if not last_state or last_state.state in IGNORED_STATES:
+        last_sensor_data = await self.async_get_last_sensor_data()
+
+        if not last_state or not last_sensor_data or last_state.state in IGNORED_STATES:
             return
 
-        last_weight = float(last_state.state)
-        last_weight_unit = last_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
-
-        # Since the RestoreEntity stores the state using the displayed unit,
-        # not the native unit, we need to convert the state back to the native
-        # unit.
-        self._weight_kg = MassConverter.convert(
-            last_weight, last_weight_unit, self.native_unit_of_measurement
-        )
+        self._attr_native_value = last_sensor_data.native_value
 
 
-# pylint: disable-next=hass-invalid-inheritance # needs fixing
-class EufyLifeHeartRateSensorEntity(RestoreEntity, EufyLifeSensorEntity):
+class EufyLifeHeartRateSensorEntity(RestoreSensor, EufyLifeSensorEntity):
     """Representation of an EufyLife heart rate sensor."""
 
-    _attr_name = "Heart rate"
-    _attr_icon = "mdi:heart-pulse"
+    _attr_translation_key = "heart_rate"
     _attr_native_unit_of_measurement = "bpm"
-
-    _heart_rate: int | None = None
 
     def __init__(self, data: EufyLifeData) -> None:
         """Initialize the heart rate sensor entity."""
@@ -188,30 +176,30 @@ class EufyLifeHeartRateSensorEntity(RestoreEntity, EufyLifeSensorEntity):
         self._attr_unique_id = f"{data.address}_heart_rate"
 
     @property
+    @override
     def available(self) -> bool:
         """Determine if the entity is available."""
         return True
 
-    @property
-    def native_value(self) -> float | None:
-        """Return the native value."""
-        return self._heart_rate
-
     @callback
+    @override
     def _handle_state_update(self, *args: Any) -> None:
         """Handle state update."""
         state = self._data.client.state
         if state is not None and state.heart_rate is not None:
-            self._heart_rate = state.heart_rate
+            self._attr_native_value = state.heart_rate
 
         super()._handle_state_update(args)
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Restore state on startup."""
         await super().async_added_to_hass()
 
         last_state = await self.async_get_last_state()
-        if not last_state or last_state.state in IGNORED_STATES:
+        last_sensor_data = await self.async_get_last_sensor_data()
+
+        if not last_state or not last_sensor_data or last_state.state in IGNORED_STATES:
             return
 
-        self._heart_rate = int(last_state.state)
+        self._attr_native_value = last_sensor_data.native_value

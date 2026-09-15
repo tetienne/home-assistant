@@ -1,14 +1,16 @@
 """Support for the Foursquare (Swarm) API."""
+
 from http import HTTPStatus
 import logging
 
+from aiohttp import web
+import probatio
 import requests
-import voluptuous as vol
 
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.const import CONF_ACCESS_TOKEN
 from homeassistant.core import HomeAssistant, ServiceCall
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,30 +24,30 @@ EVENT_PUSH = "foursquare.push"
 
 SERVICE_CHECKIN = "checkin"
 
-CHECKIN_SERVICE_SCHEMA = vol.Schema(
+CHECKIN_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("alt"): cv.string,
-        vol.Optional("altAcc"): cv.string,
-        vol.Optional("broadcast"): cv.string,
-        vol.Optional("eventId"): cv.string,
-        vol.Optional("ll"): cv.string,
-        vol.Optional("llAcc"): cv.string,
-        vol.Optional("mentions"): cv.string,
-        vol.Optional("shout"): cv.string,
-        vol.Required("venueId"): cv.string,
+        probatio.Optional("alt"): cv.string,
+        probatio.Optional("altAcc"): cv.string,
+        probatio.Optional("broadcast"): cv.string,
+        probatio.Optional("eventId"): cv.string,
+        probatio.Optional("ll"): cv.string,
+        probatio.Optional("llAcc"): cv.string,
+        probatio.Optional("mentions"): cv.string,
+        probatio.Optional("shout"): cv.string,
+        probatio.Required("venueId"): cv.string,
     }
 )
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.Schema(
+        DOMAIN: probatio.Schema(
             {
-                vol.Required(CONF_ACCESS_TOKEN): cv.string,
-                vol.Required(CONF_PUSH_SECRET): cv.string,
+                probatio.Required(CONF_ACCESS_TOKEN): cv.string,
+                probatio.Required(CONF_PUSH_SECRET): cv.string,
             }
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
 
@@ -84,11 +86,11 @@ class FoursquarePushReceiver(HomeAssistantView):
     url = "/api/foursquare"
     name = "foursquare"
 
-    def __init__(self, push_secret):
+    def __init__(self, push_secret: str) -> None:
         """Initialize the OAuth callback view."""
         self.push_secret = push_secret
 
-    async def post(self, request):
+    async def post(self, request: web.Request) -> web.Response | None:
         """Accept the POST from Foursquare."""
         try:
             data = await request.json()
@@ -100,9 +102,8 @@ class FoursquarePushReceiver(HomeAssistantView):
         _LOGGER.debug("Received Foursquare push: %s", data)
 
         if self.push_secret != secret:
-            _LOGGER.error(
-                "Received Foursquare push with invalid push secret: %s", secret
-            )
+            _LOGGER.error("Received Foursquare push with an invalid push secret")
             return self.json_message("Incorrect secret", HTTPStatus.BAD_REQUEST)
 
-        request.app["hass"].bus.async_fire(EVENT_PUSH, data)
+        request.app[KEY_HASS].bus.async_fire(EVENT_PUSH, data)
+        return None

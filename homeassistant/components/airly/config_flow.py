@@ -1,32 +1,43 @@
 """Adds config flow for Airly."""
-from __future__ import annotations
 
+from asyncio import timeout
 from http import HTTPStatus
-from typing import Any
+import logging
+from typing import Any, override
 
-from aiohttp import ClientSession
+from aiohttp import ClientConnectorError, ClientSession
 from airly import Airly
 from airly.exceptions import AirlyError
-import async_timeout
-import voluptuous as vol
+import probatio
 
-from homeassistant import config_entries
-from homeassistant.const import CONF_API_KEY, CONF_LATITUDE, CONF_LONGITUDE, CONF_NAME
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.const import CONF_API_KEY, CONF_LATITUDE, CONF_LONGITUDE
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
 
-from .const import CONF_USE_NEAREST, DOMAIN, NO_AIRLY_SENSORS
+from .const import (
+    CONF_USE_NEAREST,
+    DEFAULT_NAME,
+    DEFAULT_TIMEOUT,
+    DOMAIN,
+    NO_AIRLY_SENSORS,
+)
+
+DESCRIPTION_PLACEHOLDERS = {
+    "developer_registration_url": "https://developer.airly.eu/register",
+}
+_LOGGER = logging.getLogger(__name__)
 
 
-class AirlyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
+class AirlyFlowHandler(ConfigFlow, domain=DOMAIN):
     """Config flow for Airly."""
 
     VERSION = 1
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle a flow initialized by the user."""
         errors = {}
         use_nearest = False
@@ -39,56 +50,61 @@ class AirlyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             )
             self._abort_if_unique_id_configured()
             try:
-                location_point_valid = await test_location(
+                location_point_valid = await check_location(
                     websession,
-                    user_input["api_key"],
-                    user_input["latitude"],
-                    user_input["longitude"],
+                    user_input[CONF_API_KEY],
+                    user_input[CONF_LATITUDE],
+                    user_input[CONF_LONGITUDE],
                 )
                 if not location_point_valid:
-                    location_nearest_valid = await test_location(
+                    location_nearest_valid = await check_location(
                         websession,
-                        user_input["api_key"],
-                        user_input["latitude"],
-                        user_input["longitude"],
+                        user_input[CONF_API_KEY],
+                        user_input[CONF_LATITUDE],
+                        user_input[CONF_LONGITUDE],
                         use_nearest=True,
                     )
             except AirlyError as err:
                 if err.status_code == HTTPStatus.UNAUTHORIZED:
                     errors["base"] = "invalid_api_key"
-                if err.status_code == HTTPStatus.NOT_FOUND:
+                elif err.status_code == HTTPStatus.NOT_FOUND:
                     errors["base"] = "wrong_location"
+                else:
+                    errors["base"] = "unknown"
+            except ClientConnectorError, TimeoutError:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
             else:
                 if not location_point_valid:
                     if not location_nearest_valid:
                         return self.async_abort(reason="wrong_location")
                     use_nearest = True
                 return self.async_create_entry(
-                    title=user_input[CONF_NAME],
+                    title=DEFAULT_NAME,
                     data={**user_input, CONF_USE_NEAREST: use_nearest},
                 )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(CONF_API_KEY): str,
-                    vol.Optional(
+                    probatio.Required(CONF_API_KEY): str,
+                    probatio.Optional(
                         CONF_LATITUDE, default=self.hass.config.latitude
                     ): cv.latitude,
-                    vol.Optional(
+                    probatio.Optional(
                         CONF_LONGITUDE, default=self.hass.config.longitude
                     ): cv.longitude,
-                    vol.Optional(
-                        CONF_NAME, default=self.hass.config.location_name
-                    ): str,
                 }
             ),
             errors=errors,
+            description_placeholders=DESCRIPTION_PLACEHOLDERS,
         )
 
 
-async def test_location(
+async def check_location(
     client: ClientSession,
     api_key: str,
     latitude: float,
@@ -105,7 +121,7 @@ async def test_location(
         measurements = airly.create_measurements_session_point(
             latitude=latitude, longitude=longitude
         )
-    async with async_timeout.timeout(10):
+    async with timeout(DEFAULT_TIMEOUT):
         await measurements.update()
 
     current = measurements.current

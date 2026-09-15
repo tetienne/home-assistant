@@ -1,8 +1,7 @@
 """Component to integrate ambilight for TVs exposing the Joint Space API."""
-from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast, override
 
 from haphilipsjs import PhilipsTV
 from haphilipsjs.typing import AmbilightCurrentConfiguration
@@ -15,16 +14,13 @@ from homeassistant.components.light import (
     LightEntity,
     LightEntityFeature,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util.color import color_hsv_to_RGB, color_RGB_to_hsv
 
-from . import PhilipsTVDataUpdateCoordinator
-from .const import DOMAIN
+from .coordinator import PhilipsTVConfigEntry, PhilipsTVDataUpdateCoordinator
+from .entity import PhilipsJsEntity
 
 EFFECT_PARTITION = ": "
 EFFECT_MODE = "Mode"
@@ -35,11 +31,11 @@ EFFECT_EXPERT_STYLES = {"FOLLOW_AUDIO", "FOLLOW_COLOR", "Lounge light"}
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: PhilipsTVConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the configuration entry."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]
+    coordinator = config_entry.runtime_data
     async_add_entities([PhilipsTVLightEntity(coordinator)])
 
 
@@ -93,12 +89,17 @@ class AmbilightEffect:
             return AmbilightEffect(mode=EFFECT_EXPERT, style=style, algorithm=algorithm)
         return AmbilightEffect(mode=EFFECT_AUTO, style=style, algorithm=algorithm)
 
+    @override
     def __str__(self) -> str:
         """Get a string representation of the effect."""
         if self.mode == EFFECT_MODE:
             return f"{EFFECT_MODE}{EFFECT_PARTITION}{self.style}"
         if self.mode == EFFECT_EXPERT:
-            return f"{self.style}{EFFECT_PARTITION}{self.algorithm}{EFFECT_PARTITION}{EFFECT_EXPERT}"
+            return (
+                f"{self.style}{EFFECT_PARTITION}"
+                f"{self.algorithm}{EFFECT_PARTITION}"
+                f"{EFFECT_EXPERT}"
+            )
         return f"{self.style}{EFFECT_PARTITION}{self.algorithm}"
 
 
@@ -134,17 +135,15 @@ def _average_pixels(data):
     return 0.0, 0.0, 0.0
 
 
-class PhilipsTVLightEntity(
-    CoordinatorEntity[PhilipsTVDataUpdateCoordinator], LightEntity
-):
+class PhilipsTVLightEntity(PhilipsJsEntity, LightEntity):
     """Representation of a Philips TV exposing the JointSpace API."""
 
-    _attr_has_entity_name = True
+    _attr_effect: str
+    _attr_translation_key = "ambilight"
+    _attr_supported_color_modes = {ColorMode.HS}
+    _attr_supported_features = LightEntityFeature.EFFECT
 
-    def __init__(
-        self,
-        coordinator: PhilipsTVDataUpdateCoordinator,
-    ) -> None:
+    def __init__(self, coordinator: PhilipsTVDataUpdateCoordinator) -> None:
         """Initialize light."""
         self._tv = coordinator.api
         self._hs = None
@@ -153,20 +152,7 @@ class PhilipsTVLightEntity(
         self._last_selected_effect: AmbilightEffect | None = None
         super().__init__(coordinator)
 
-        self._attr_supported_color_modes = {ColorMode.HS, ColorMode.ONOFF}
-        self._attr_supported_features = LightEntityFeature.EFFECT
-        self._attr_name = "Ambilight"
         self._attr_unique_id = coordinator.unique_id
-        self._attr_icon = "mdi:television-ambient-light"
-        self._attr_device_info = DeviceInfo(
-            identifiers={
-                (DOMAIN, self._attr_unique_id),
-            },
-            manufacturer="Philips",
-            model=coordinator.system.get("model"),
-            name=coordinator.system["name"],
-            sw_version=coordinator.system.get("softwareversion"),
-        )
 
         self._update_from_coordinator()
 
@@ -216,6 +202,7 @@ class PhilipsTVLightEntity(
         return AmbilightEffect(EFFECT_MODE, self._tv.ambilight_mode, None)
 
     @property
+    @override
     def color_mode(self) -> ColorMode:
         """Return the current color mode."""
         current = self._tv.ambilight_current_configuration
@@ -228,10 +215,11 @@ class PhilipsTVLightEntity(
         return ColorMode.ONOFF
 
     @property
-    def is_on(self):
+    @override
+    def is_on(self) -> bool:
         """Return if the light is turned on."""
         if self._tv.on:
-            effect = AmbilightEffect.from_str(self.effect)
+            effect = AmbilightEffect.from_str(self._attr_effect)
             return effect.is_on(self._tv.powerstate)
 
         return False
@@ -264,12 +252,13 @@ class PhilipsTVLightEntity(
                 *_average_pixels(self._tv.ambilight_cached)
             )
             self._attr_hs_color = hsv_h, hsv_s
-            self._attr_brightness = hsv_v * 255.0 / 100.0
+            self._attr_brightness = round(hsv_v * 255.0 / 100.0)
         else:
             self._attr_hs_color = None
             self._attr_brightness = None
 
     @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self._update_from_coordinator()
@@ -308,7 +297,7 @@ class PhilipsTVLightEntity(
             "color": {
                 "hue": round(hs_color[0] * 255.0 / 360.0),
                 "saturation": round(hs_color[1] * 255.0 / 100.0),
-                "brightness": round(brightness),
+                "brightness": brightness,
             },
             "colorDelta": {
                 "hue": 0,
@@ -339,11 +328,12 @@ class PhilipsTVLightEntity(
         if await self._tv.setAmbilightCurrentConfiguration(config) is False:
             raise HomeAssistantError("Failed to set ambilight mode")
 
+    @override
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the bulb on."""
         brightness = kwargs.get(ATTR_BRIGHTNESS, self.brightness)
         hs_color = kwargs.get(ATTR_HS_COLOR, self.hs_color)
-        attr_effect = kwargs.get(ATTR_EFFECT, self.effect)
+        attr_effect = cast(str, kwargs.get(ATTR_EFFECT, self.effect))
 
         if not self._tv.on:
             raise HomeAssistantError("TV is not available")
@@ -380,6 +370,7 @@ class PhilipsTVLightEntity(
         self._update_from_coordinator()
         self.async_write_ha_state()
 
+    @override
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn of ambilight."""
 
@@ -393,3 +384,13 @@ class PhilipsTVLightEntity(
 
         self._update_from_coordinator()
         self.async_write_ha_state()
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return true if entity is available."""
+        if not super().available:
+            return False
+        if not self._tv.on:
+            return False
+        return True

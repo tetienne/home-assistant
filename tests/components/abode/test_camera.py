@@ -1,30 +1,40 @@
 """Tests for the Abode camera device."""
+
 from unittest.mock import patch
 
-from homeassistant.components.abode.const import DOMAIN as ABODE_DOMAIN
+import pytest
+from syrupy.assertion import SnapshotAssertion
+
+from homeassistant.components.abode.const import DOMAIN
 from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
-from homeassistant.const import ATTR_ENTITY_ID, STATE_IDLE
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from .common import setup_platform
 
-
-async def test_entity_registry(hass: HomeAssistant) -> None:
-    """Tests that the devices are registered in the entity registry."""
-    await setup_platform(hass, CAMERA_DOMAIN)
-    entity_registry = er.async_get(hass)
-
-    entry = entity_registry.async_get("camera.test_cam")
-    assert entry.unique_id == "d0a3a1c316891ceb00c20118aae2a133"
+from tests.common import snapshot_platform
 
 
-async def test_attributes(hass: HomeAssistant) -> None:
-    """Test the camera attributes are correct."""
-    await setup_platform(hass, CAMERA_DOMAIN)
+@pytest.fixture(autouse=True)
+def mock_getrandbits():
+    """Mock camera access token which normally is randomized."""
+    with patch(
+        "homeassistant.components.camera.SystemRandom.getrandbits",
+        return_value=1,
+    ):
+        yield
 
-    state = hass.states.get("camera.test_cam")
-    assert state.state == STATE_IDLE
+
+async def test_all_entities(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Test all entities."""
+    config_entry = await setup_platform(hass, CAMERA_DOMAIN)
+
+    await snapshot_platform(hass, entity_registry, snapshot, config_entry.entry_id)
 
 
 async def test_capture_image(hass: HomeAssistant) -> None:
@@ -33,7 +43,7 @@ async def test_capture_image(hass: HomeAssistant) -> None:
 
     with patch("jaraco.abode.devices.camera.Camera.capture") as mock_capture:
         await hass.services.async_call(
-            ABODE_DOMAIN,
+            DOMAIN,
             "capture_image",
             {ATTR_ENTITY_ID: "camera.test_cam"},
             blocking=True,

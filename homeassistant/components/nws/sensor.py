@@ -1,9 +1,8 @@
 """Sensors for National Weather Service (NWS)."""
-from __future__ import annotations
 
 from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Any
+from datetime import datetime
+from typing import override
 
 from pynws import SimpleNWS
 
@@ -15,8 +14,6 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    CONF_LATITUDE,
-    CONF_LONGITUDE,
     DEGREE,
     PERCENTAGE,
     UnitOfLength,
@@ -25,10 +22,12 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util.dt import utcnow
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    TimestampDataUpdateCoordinator,
+)
+from homeassistant.util.dt import parse_datetime
 from homeassistant.util.unit_conversion import (
     DistanceConverter,
     PressureConverter,
@@ -36,20 +35,13 @@ from homeassistant.util.unit_conversion import (
 )
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
-from . import NwsDataUpdateCoordinator, base_unique_id, device_info
-from .const import (
-    ATTRIBUTION,
-    CONF_STATION,
-    COORDINATOR_OBSERVATION,
-    DOMAIN,
-    NWS_DATA,
-    OBSERVATION_VALID_TIME,
-)
+from . import NWSConfigEntry, NWSData, device_info, get_base_unique_id
+from .const import ATTRIBUTION
 
 PARALLEL_UPDATES = 0
 
 
-@dataclass
+@dataclass(frozen=True)
 class NWSSensorEntityDescription(SensorEntityDescription):
     """Class describing NWSSensor entities."""
 
@@ -120,6 +112,8 @@ SENSOR_TYPES: tuple[NWSSensorEntityDescription, ...] = (
         icon="mdi:compass-rose",
         native_unit_of_measurement=DEGREE,
         unit_convert=DEGREE,
+        device_class=SensorDeviceClass.WIND_DIRECTION,
+        state_class=SensorStateClass.MEASUREMENT_ANGLE,
     ),
     NWSSensorEntityDescription(
         key="barometricPressure",
@@ -145,55 +139,71 @@ SENSOR_TYPES: tuple[NWSSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfLength.METERS,
         unit_convert=UnitOfLength.MILES,
     ),
+    NWSSensorEntityDescription(
+        key="timestamp",
+        name="Latest Observation Time",
+        device_class=SensorDeviceClass.TIMESTAMP,
+    ),
 )
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: NWSConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the NWS weather platform."""
-    hass_data = hass.data[DOMAIN][entry.entry_id]
-    station = entry.data[CONF_STATION]
+    nws_data = entry.runtime_data
 
     async_add_entities(
         NWSSensor(
             hass=hass,
-            entry_data=entry.data,
-            hass_data=hass_data,
+            entry=entry,
+            nws_data=nws_data,
             description=description,
-            station=station,
         )
         for description in SENSOR_TYPES
     )
 
 
-class NWSSensor(CoordinatorEntity[NwsDataUpdateCoordinator], SensorEntity):
+class NWSSensor(CoordinatorEntity[TimestampDataUpdateCoordinator[None]], SensorEntity):
     """An NWS Sensor Entity."""
 
     entity_description: NWSSensorEntityDescription
     _attr_attribution = ATTRIBUTION
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
         hass: HomeAssistant,
-        entry_data: MappingProxyType[str, Any],
-        hass_data: dict[str, Any],
+        entry: ConfigEntry,
+        nws_data: NWSData,
         description: NWSSensorEntityDescription,
-        station: str,
     ) -> None:
         """Initialise the platform with a data instance."""
-        super().__init__(hass_data[COORDINATOR_OBSERVATION])
-        self._nws: SimpleNWS = hass_data[NWS_DATA]
-        self._latitude = entry_data[CONF_LATITUDE]
-        self._longitude = entry_data[CONF_LONGITUDE]
+        super().__init__(nws_data.coordinator_observation)
+        self._nws_data = nws_data
         self.entity_description = description
 
-        self._attr_name = f"{station} {description.name}"
         if hass.config.units is US_CUSTOMARY_SYSTEM:
             self._attr_native_unit_of_measurement = description.unit_convert
+        self._attr_device_info = device_info(entry, nws_data)
+        self._attr_unique_id = f"{get_base_unique_id(entry)}_{description.key}"
 
     @property
-    def native_value(self) -> float | None:
+    def _nws(self) -> SimpleNWS:
+        """Return the current SimpleNWS API instance."""
+        return self._nws_data.api
+
+    @property
+    @override
+    def name(self) -> str:
+        """Return the sensor name with current station."""
+        return f"{self._nws.station} {self.entity_description.name}"
+
+    @property
+    @override
+    def native_value(self) -> float | datetime | None:
         """Return the state."""
         if (
             not (observation := self._nws.observation)
@@ -226,31 +236,6 @@ class NWSSensor(CoordinatorEntity[NwsDataUpdateCoordinator], SensorEntity):
             return round(value, 1)
         if unit_of_measurement == PERCENTAGE:
             return round(value)
+        if self.device_class == SensorDeviceClass.TIMESTAMP:
+            return parse_datetime(value)
         return value
-
-    @property
-    def unique_id(self) -> str:
-        """Return a unique_id for this entity."""
-        return f"{base_unique_id(self._latitude, self._longitude)}_{self.entity_description.key}"
-
-    @property
-    def available(self) -> bool:
-        """Return if state is available."""
-        if self.coordinator.last_update_success_time:
-            last_success_time = (
-                utcnow() - self.coordinator.last_update_success_time
-                < OBSERVATION_VALID_TIME
-            )
-        else:
-            last_success_time = False
-        return self.coordinator.last_update_success or last_success_time
-
-    @property
-    def entity_registry_enabled_default(self) -> bool:
-        """Return if the entity should be enabled when first added to the entity registry."""
-        return False
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device info."""
-        return device_info(self._latitude, self._longitude)

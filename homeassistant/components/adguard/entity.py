@@ -1,13 +1,15 @@
 """AdGuard Home base entity."""
-from __future__ import annotations
 
-from adguardhome import AdGuardHome, AdGuardHomeError
+from typing import override
 
-from homeassistant.config_entries import SOURCE_HASSIO, ConfigEntry
-from homeassistant.helpers.device_registry import DeviceEntryType
-from homeassistant.helpers.entity import DeviceInfo, Entity
+from adguardhome import AdGuardHomeError
 
-from .const import DATA_ADGUARD_VERSION, DOMAIN, LOGGER
+from homeassistant.config_entries import SOURCE_HASSIO
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.entity import Entity
+
+from . import AdGuardConfigEntry, AdGuardData
+from .const import DOMAIN, LOGGER
 
 
 class AdGuardHomeEntity(Entity):
@@ -18,12 +20,13 @@ class AdGuardHomeEntity(Entity):
 
     def __init__(
         self,
-        adguard: AdGuardHome,
-        entry: ConfigEntry,
+        data: AdGuardData,
+        entry: AdGuardConfigEntry,
     ) -> None:
         """Initialize the AdGuard Home entity."""
         self._entry = entry
-        self.adguard = adguard
+        self.data = data
+        self.adguard = data.client
 
     async def async_update(self) -> None:
         """Update AdGuard Home entity."""
@@ -43,13 +46,14 @@ class AdGuardHomeEntity(Entity):
 
     async def _adguard_update(self) -> None:
         """Update AdGuard Home entity."""
-        raise NotImplementedError()
+        raise NotImplementedError
 
     @property
+    @override
     def device_info(self) -> DeviceInfo:
         """Return device information about this AdGuard Home instance."""
         if self._entry.source == SOURCE_HASSIO:
-            config_url = "homeassistant://hassio/ingress/a0d7b954_adguard"
+            config_url = "homeassistant://app/a0d7b954_adguard"
         elif self.adguard.tls:
             config_url = f"https://{self.adguard.host}:{self.adguard.port}"
         else:
@@ -57,18 +61,9 @@ class AdGuardHomeEntity(Entity):
 
         return DeviceInfo(
             entry_type=DeviceEntryType.SERVICE,
-            identifiers={
-                (  # type: ignore[arg-type]
-                    DOMAIN,
-                    self.adguard.host,
-                    self.adguard.port,
-                    self.adguard.base_path,
-                )
-            },
+            identifiers={(DOMAIN, self._entry.entry_id)},
             manufacturer="AdGuard Team",
             name="AdGuard Home",
-            sw_version=self.hass.data[DOMAIN][self._entry.entry_id].get(
-                DATA_ADGUARD_VERSION
-            ),
+            sw_version=self.data.version,
             configuration_url=config_url,
         )

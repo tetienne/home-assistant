@@ -1,10 +1,11 @@
 """The test for sensor device automation."""
+
 from datetime import timedelta
 
 import pytest
 from pytest_unordered import unordered
 
-import homeassistant.components.automation as automation
+from homeassistant.components import automation
 from homeassistant.components.device_automation import DeviceAutomationType
 from homeassistant.components.sensor import (
     ATTR_STATE_CLASS,
@@ -20,28 +21,18 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.entity_registry import RegistryEntryHider
 from homeassistant.setup import async_setup_component
-import homeassistant.util.dt as dt_util
+from homeassistant.util import dt as dt_util
 from homeassistant.util.json import load_json
+
+from .common import UNITS_OF_MEASUREMENT, MockSensor
 
 from tests.common import (
     MockConfigEntry,
     async_fire_time_changed,
     async_get_device_automation_capabilities,
     async_get_device_automations,
-    async_mock_service,
+    setup_test_component_platform,
 )
-from tests.testing_config.custom_components.test.sensor import UNITS_OF_MEASUREMENT
-
-
-@pytest.fixture(autouse=True, name="stub_blueprint_populate")
-def stub_blueprint_populate_autouse(stub_blueprint_populate: None) -> None:
-    """Stub copying the blueprints to the config folder."""
-
-
-@pytest.fixture
-def calls(hass: HomeAssistant) -> list[ServiceCall]:
-    """Track calls to a mock service."""
-    return async_mock_service(hass, "test", "automation")
 
 
 @pytest.mark.parametrize(
@@ -86,11 +77,10 @@ async def test_get_triggers(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
-    enable_custom_integrations: None,
+    mock_sensor_entities: dict[str, MockSensor],
 ) -> None:
     """Test we get the expected triggers from a sensor."""
-    platform = getattr(hass.components, f"test.{DOMAIN}")
-    platform.init()
+    setup_test_component_platform(hass, DOMAIN, mock_sensor_entities.values())
     assert await async_setup_component(hass, DOMAIN, {DOMAIN: {CONF_PLATFORM: "test"}})
     await hass.async_block_till_done()
     sensor_entries: dict[SensorDeviceClass, er.RegistryEntry] = {}
@@ -105,10 +95,16 @@ async def test_get_triggers(
         sensor_entries[device_class] = entity_registry.async_get_or_create(
             DOMAIN,
             "test",
-            platform.ENTITIES[device_class].unique_id,
+            mock_sensor_entities[device_class].unique_id,
             device_id=device_entry.id,
         )
 
+    DEVICE_CLASSES_WITHOUT_TRIGGER = {
+        SensorDeviceClass.DATE,
+        SensorDeviceClass.ENUM,
+        SensorDeviceClass.TIMESTAMP,
+        SensorDeviceClass.UPTIME,
+    }
     expected_triggers = [
         {
             "platform": "device",
@@ -120,24 +116,24 @@ async def test_get_triggers(
         }
         for device_class in SensorDeviceClass
         if device_class in UNITS_OF_MEASUREMENT
+        and device_class not in DEVICE_CLASSES_WITHOUT_TRIGGER
         for trigger in ENTITY_TRIGGERS[device_class]
-        if device_class != "none"
     ]
     triggers = await async_get_device_automations(
         hass, DeviceAutomationType.TRIGGER, device_entry.id
     )
-    assert len(triggers) == 27
+    assert len(triggers) == 58
     assert triggers == unordered(expected_triggers)
 
 
 @pytest.mark.parametrize(
     ("hidden_by", "entity_category"),
-    (
+    [
         (RegistryEntryHider.INTEGRATION, None),
         (RegistryEntryHider.USER, None),
         (None, EntityCategory.CONFIG),
         (None, EntityCategory.DIAGNOSTIC),
-    ),
+    ],
 )
 async def test_get_triggers_hidden_auxiliary(
     hass: HomeAssistant,
@@ -171,7 +167,7 @@ async def test_get_triggers_hidden_auxiliary(
             "entity_id": entity_entry.id,
             "metadata": {"secondary": True},
         }
-        for trigger in ["value"]
+        for trigger in ("value",)
     ]
     triggers = await async_get_device_automations(
         hass, DeviceAutomationType.TRIGGER, device_entry.id
@@ -181,13 +177,13 @@ async def test_get_triggers_hidden_auxiliary(
 
 @pytest.mark.parametrize(
     ("state_class", "unit", "trigger_types"),
-    (
+    [
         (SensorStateClass.MEASUREMENT, None, ["value"]),
         (SensorStateClass.TOTAL, None, ["value"]),
         (SensorStateClass.TOTAL_INCREASING, None, ["value"]),
         (SensorStateClass.MEASUREMENT, "dogs", ["value"]),
         (None, None, []),
-    ),
+    ],
 )
 async def test_get_triggers_no_unit_or_stateclass(
     hass: HomeAssistant,
@@ -240,6 +236,7 @@ async def test_get_trigger_capabilities(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
+    mock_sensor_entities: dict[str, MockSensor],
     set_state,
     device_class_reg,
     device_class_state,
@@ -247,8 +244,7 @@ async def test_get_trigger_capabilities(
     unit_state,
 ) -> None:
     """Test we get the expected capabilities from a sensor trigger."""
-    platform = getattr(hass.components, f"test.{DOMAIN}")
-    platform.init()
+    setup_test_component_platform(hass, DOMAIN, mock_sensor_entities)
 
     config_entry = MockConfigEntry(domain="test", data={})
     config_entry.add_to_hass(hass)
@@ -259,7 +255,7 @@ async def test_get_trigger_capabilities(
     entity_id = entity_registry.async_get_or_create(
         DOMAIN,
         "test",
-        platform.ENTITIES["battery"].unique_id,
+        mock_sensor_entities["battery"].unique_id,
         device_id=device_entry.id,
         original_device_class=device_class_reg,
         unit_of_measurement=unit_reg,
@@ -277,15 +273,22 @@ async def test_get_trigger_capabilities(
                 "description": {"suffix": PERCENTAGE},
                 "name": "above",
                 "optional": True,
+                "required": False,
                 "type": "float",
             },
             {
                 "description": {"suffix": PERCENTAGE},
                 "name": "below",
                 "optional": True,
+                "required": False,
                 "type": "float",
             },
-            {"name": "for", "optional": True, "type": "positive_time_period_dict"},
+            {
+                "name": "for",
+                "optional": True,
+                "required": False,
+                "type": "positive_time_period_dict",
+            },
         ]
     }
     triggers = await async_get_device_automations(
@@ -310,6 +313,7 @@ async def test_get_trigger_capabilities_legacy(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
+    mock_sensor_entities: dict[str, MockSensor],
     set_state,
     device_class_reg,
     device_class_state,
@@ -317,8 +321,7 @@ async def test_get_trigger_capabilities_legacy(
     unit_state,
 ) -> None:
     """Test we get the expected capabilities from a sensor trigger."""
-    platform = getattr(hass.components, f"test.{DOMAIN}")
-    platform.init()
+    setup_test_component_platform(hass, DOMAIN, mock_sensor_entities)
 
     config_entry = MockConfigEntry(domain="test", data={})
     config_entry.add_to_hass(hass)
@@ -329,7 +332,7 @@ async def test_get_trigger_capabilities_legacy(
     entity_id = entity_registry.async_get_or_create(
         DOMAIN,
         "test",
-        platform.ENTITIES["battery"].unique_id,
+        mock_sensor_entities["battery"].unique_id,
         device_id=device_entry.id,
         original_device_class=device_class_reg,
         unit_of_measurement=unit_reg,
@@ -347,15 +350,22 @@ async def test_get_trigger_capabilities_legacy(
                 "description": {"suffix": PERCENTAGE},
                 "name": "above",
                 "optional": True,
+                "required": False,
                 "type": "float",
             },
             {
                 "description": {"suffix": PERCENTAGE},
                 "name": "below",
                 "optional": True,
+                "required": False,
                 "type": "float",
             },
-            {"name": "for", "optional": True, "type": "positive_time_period_dict"},
+            {
+                "name": "for",
+                "optional": True,
+                "required": False,
+                "type": "positive_time_period_dict",
+            },
         ]
     }
     triggers = await async_get_device_automations(
@@ -373,11 +383,13 @@ async def test_get_trigger_capabilities_legacy(
 async def test_get_trigger_capabilities_none(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
-    enable_custom_integrations: None,
 ) -> None:
     """Test we get the expected capabilities from a sensor trigger."""
-    platform = getattr(hass.components, f"test.{DOMAIN}")
-    platform.init()
+    entity = MockSensor(
+        name="none sensor",
+        unique_id="unique_none",
+    )
+    setup_test_component_platform(hass, DOMAIN, [entity])
 
     config_entry = MockConfigEntry(domain="test", data={})
     config_entry.add_to_hass(hass)
@@ -385,7 +397,7 @@ async def test_get_trigger_capabilities_none(
     entry_none = entity_registry.async_get_or_create(
         DOMAIN,
         "test",
-        platform.ENTITIES["none"].unique_id,
+        entity.unique_id,
     )
 
     assert await async_setup_component(hass, DOMAIN, {DOMAIN: {CONF_PLATFORM: "test"}})
@@ -416,15 +428,23 @@ async def test_get_trigger_capabilities_none(
         assert capabilities == expected_capabilities
 
 
+@pytest.mark.usefixtures("enable_custom_integrations")
 async def test_if_fires_not_on_above_below(
     hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
-    calls,
     caplog: pytest.LogCaptureFixture,
-    enable_custom_integrations: None,
 ) -> None:
     """Test for value triggers firing."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     assert await async_setup_component(
         hass,
@@ -435,7 +455,7 @@ async def test_if_fires_not_on_above_below(
                     "trigger": {
                         "platform": "device",
                         "domain": DOMAIN,
-                        "device_id": "",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "battery_level",
                     },
@@ -447,14 +467,23 @@ async def test_if_fires_not_on_above_below(
     assert "must contain at least one of below, above" in caplog.text
 
 
+@pytest.mark.usefixtures("enable_custom_integrations")
 async def test_if_fires_on_state_above(
     hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
-    calls,
-    enable_custom_integrations: None,
+    service_calls: list[ServiceCall],
 ) -> None:
     """Test for value triggers firing."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     hass.states.async_set(entry.entity_id, STATE_UNKNOWN, {"device_class": "battery"})
 
@@ -467,7 +496,7 @@ async def test_if_fires_on_state_above(
                     "trigger": {
                         "platform": "device",
                         "domain": DOMAIN,
-                        "device_id": "",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "battery_level",
                         "above": 10,
@@ -475,15 +504,12 @@ async def test_if_fires_on_state_above(
                     "action": {
                         "service": "test.automation",
                         "data_template": {
-                            "some": "bat_low {{ trigger.%s }}"
-                            % "}} - {{ trigger.".join(
-                                (
-                                    "platform",
-                                    "entity_id",
-                                    "from_state.state",
-                                    "to_state.state",
-                                    "for",
-                                )
+                            "some": (
+                                "bat_low {{ trigger.platform }}"
+                                " - {{ trigger.entity_id }}"
+                                " - {{ trigger.from_state.state }}"
+                                " - {{ trigger.to_state.state }}"
+                                " - {{ trigger.for }}"
                             )
                         },
                     },
@@ -492,28 +518,38 @@ async def test_if_fires_on_state_above(
         },
     )
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 9)
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 11)
     await hass.async_block_till_done()
-    assert len(calls) == 1
+    assert len(service_calls) == 1
     assert (
-        calls[0].data["some"] == f"bat_low device - {entry.entity_id} - 9 - 11 - None"
+        service_calls[0].data["some"]
+        == f"bat_low device - {entry.entity_id} - 9 - 11 - None"
     )
 
 
+@pytest.mark.usefixtures("enable_custom_integrations")
 async def test_if_fires_on_state_below(
     hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
-    calls,
-    enable_custom_integrations: None,
+    service_calls: list[ServiceCall],
 ) -> None:
     """Test for value triggers firing."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     hass.states.async_set(entry.entity_id, STATE_UNKNOWN, {"device_class": "battery"})
 
@@ -526,7 +562,7 @@ async def test_if_fires_on_state_below(
                     "trigger": {
                         "platform": "device",
                         "domain": DOMAIN,
-                        "device_id": "",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "battery_level",
                         "below": 10,
@@ -534,15 +570,12 @@ async def test_if_fires_on_state_below(
                     "action": {
                         "service": "test.automation",
                         "data_template": {
-                            "some": "bat_low {{ trigger.%s }}"
-                            % "}} - {{ trigger.".join(
-                                (
-                                    "platform",
-                                    "entity_id",
-                                    "from_state.state",
-                                    "to_state.state",
-                                    "for",
-                                )
+                            "some": (
+                                "bat_low {{ trigger.platform }}"
+                                " - {{ trigger.entity_id }}"
+                                " - {{ trigger.from_state.state }}"
+                                " - {{ trigger.to_state.state }}"
+                                " - {{ trigger.for }}"
                             )
                         },
                     },
@@ -551,28 +584,38 @@ async def test_if_fires_on_state_below(
         },
     )
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 11)
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 9)
     await hass.async_block_till_done()
-    assert len(calls) == 1
+    assert len(service_calls) == 1
     assert (
-        calls[0].data["some"] == f"bat_low device - {entry.entity_id} - 11 - 9 - None"
+        service_calls[0].data["some"]
+        == f"bat_low device - {entry.entity_id} - 11 - 9 - None"
     )
 
 
+@pytest.mark.usefixtures("enable_custom_integrations")
 async def test_if_fires_on_state_between(
     hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
-    calls,
-    enable_custom_integrations: None,
+    service_calls: list[ServiceCall],
 ) -> None:
     """Test for value triggers firing."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     hass.states.async_set(entry.entity_id, STATE_UNKNOWN, {"device_class": "battery"})
 
@@ -585,7 +628,7 @@ async def test_if_fires_on_state_between(
                     "trigger": {
                         "platform": "device",
                         "domain": DOMAIN,
-                        "device_id": "",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "battery_level",
                         "above": 10,
@@ -594,15 +637,12 @@ async def test_if_fires_on_state_between(
                     "action": {
                         "service": "test.automation",
                         "data_template": {
-                            "some": "bat_low {{ trigger.%s }}"
-                            % "}} - {{ trigger.".join(
-                                (
-                                    "platform",
-                                    "entity_id",
-                                    "from_state.state",
-                                    "to_state.state",
-                                    "for",
-                                )
+                            "some": (
+                                "bat_low {{ trigger.platform }}"
+                                " - {{ trigger.entity_id }}"
+                                " - {{ trigger.from_state.state }}"
+                                " - {{ trigger.to_state.state }}"
+                                " - {{ trigger.for }}"
                             )
                         },
                     },
@@ -611,39 +651,50 @@ async def test_if_fires_on_state_between(
         },
     )
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 9)
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 11)
     await hass.async_block_till_done()
-    assert len(calls) == 1
+    assert len(service_calls) == 1
     assert (
-        calls[0].data["some"] == f"bat_low device - {entry.entity_id} - 9 - 11 - None"
+        service_calls[0].data["some"]
+        == f"bat_low device - {entry.entity_id} - 9 - 11 - None"
     )
 
     hass.states.async_set(entry.entity_id, 21)
     await hass.async_block_till_done()
-    assert len(calls) == 1
+    assert len(service_calls) == 1
 
     hass.states.async_set(entry.entity_id, 19)
     await hass.async_block_till_done()
-    assert len(calls) == 2
+    assert len(service_calls) == 2
     assert (
-        calls[1].data["some"] == f"bat_low device - {entry.entity_id} - 21 - 19 - None"
+        service_calls[1].data["some"]
+        == f"bat_low device - {entry.entity_id} - 21 - 19 - None"
     )
 
 
+@pytest.mark.usefixtures("enable_custom_integrations")
 async def test_if_fires_on_state_legacy(
     hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
-    calls,
-    enable_custom_integrations: None,
+    service_calls: list[ServiceCall],
 ) -> None:
     """Test for value triggers firing."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     hass.states.async_set(entry.entity_id, STATE_UNKNOWN, {"device_class": "battery"})
 
@@ -656,7 +707,7 @@ async def test_if_fires_on_state_legacy(
                     "trigger": {
                         "platform": "device",
                         "domain": DOMAIN,
-                        "device_id": "",
+                        "device_id": device_entry.id,
                         "entity_id": entry.entity_id,
                         "type": "battery_level",
                         "above": 10,
@@ -664,15 +715,12 @@ async def test_if_fires_on_state_legacy(
                     "action": {
                         "service": "test.automation",
                         "data_template": {
-                            "some": "bat_low {{ trigger.%s }}"
-                            % "}} - {{ trigger.".join(
-                                (
-                                    "platform",
-                                    "entity_id",
-                                    "from_state.state",
-                                    "to_state.state",
-                                    "for",
-                                )
+                            "some": (
+                                "bat_low {{ trigger.platform }}"
+                                " - {{ trigger.entity_id }}"
+                                " - {{ trigger.from_state.state }}"
+                                " - {{ trigger.to_state.state }}"
+                                " - {{ trigger.for }}"
                             )
                         },
                     },
@@ -681,28 +729,38 @@ async def test_if_fires_on_state_legacy(
         },
     )
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 9)
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 11)
     await hass.async_block_till_done()
-    assert len(calls) == 1
+    assert len(service_calls) == 1
     assert (
-        calls[0].data["some"] == f"bat_low device - {entry.entity_id} - 9 - 11 - None"
+        service_calls[0].data["some"]
+        == f"bat_low device - {entry.entity_id} - 9 - 11 - None"
     )
 
 
+@pytest.mark.usefixtures("enable_custom_integrations")
 async def test_if_fires_on_state_change_with_for(
     hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
-    calls,
-    enable_custom_integrations: None,
+    service_calls: list[ServiceCall],
 ) -> None:
     """Test for triggers firing with delay."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     hass.states.async_set(entry.entity_id, STATE_UNKNOWN, {"device_class": "battery"})
 
@@ -715,7 +773,7 @@ async def test_if_fires_on_state_change_with_for(
                     "trigger": {
                         "platform": "device",
                         "domain": DOMAIN,
-                        "device_id": "",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "battery_level",
                         "above": 10,
@@ -724,15 +782,12 @@ async def test_if_fires_on_state_change_with_for(
                     "action": {
                         "service": "test.automation",
                         "data_template": {
-                            "some": "turn_off {{ trigger.%s }}"
-                            % "}} - {{ trigger.".join(
-                                (
-                                    "platform",
-                                    "entity_id",
-                                    "from_state.state",
-                                    "to_state.state",
-                                    "for",
-                                )
+                            "some": (
+                                "turn_off {{ trigger.platform }}"
+                                " - {{ trigger.entity_id }}"
+                                " - {{ trigger.from_state.state }}"
+                                " - {{ trigger.to_state.state }}"
+                                " - {{ trigger.for }}"
                             )
                         },
                     },
@@ -741,17 +796,17 @@ async def test_if_fires_on_state_change_with_for(
         },
     )
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
 
     hass.states.async_set(entry.entity_id, 10)
     hass.states.async_set(entry.entity_id, 11)
     await hass.async_block_till_done()
-    assert len(calls) == 0
+    assert len(service_calls) == 0
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=10))
     await hass.async_block_till_done()
-    assert len(calls) == 1
+    assert len(service_calls) == 1
     await hass.async_block_till_done()
     assert (
-        calls[0].data["some"]
+        service_calls[0].data["some"]
         == f"turn_off device - {entry.entity_id} - 10 - 11 - 0:00:05"
     )

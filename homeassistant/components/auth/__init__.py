@@ -122,25 +122,28 @@ This is an endpoint for OAuth2 Authorization callbacks used by integrations
 that link accounts with other cloud providers using LocalOAuth2Implementation
 as part of a config flow.
 """
-from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from http import HTTPStatus
+from logging import getLogger
 from typing import Any, cast
 import uuid
 
 from aiohttp import web
 from multidict import MultiDictProxy
-import voluptuous as vol
+import probatio
 
 from homeassistant.auth import InvalidAuthError
 from homeassistant.auth.models import (
     TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
     Credentials,
+    RefreshToken,
     User,
 )
 from homeassistant.components import websocket_api
+from homeassistant.components.http import KEY_HASS
 from homeassistant.components.http.auth import (
     async_sign_path,
     async_user_not_allowed_do_auth,
@@ -152,32 +155,33 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.config_entry_oauth2_flow import OAuth2AuthorizeCallbackView
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.loader import bind_hass
 from homeassistant.util import dt as dt_util
+from homeassistant.util.hass_dict import HassKey
 
 from . import indieauth, login_flow, mfa_setup_flow
 
 DOMAIN = "auth"
 
-StoreResultType = Callable[[str, Credentials], str]
-RetrieveResultType = Callable[[str, str], Credentials | None]
-
+type StoreResultType = Callable[[str, Credentials], str]
+type RetrieveResultType = Callable[[str, str], Credentials | None]
+DATA_STORE: HassKey[StoreResultType] = HassKey(DOMAIN)
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
+DELETE_CURRENT_TOKEN_DELAY = 2
 
-@bind_hass
+
 def create_auth_code(
     hass: HomeAssistant, client_id: str, credential: Credentials
 ) -> str:
     """Create an authorization code to fetch tokens."""
-    return cast(StoreResultType, hass.data[DOMAIN])(client_id, credential)
+    return hass.data[DATA_STORE](client_id, credential)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Component to allow users to login."""
     store_result, retrieve_result = _create_auth_code_store()
 
-    hass.data[DOMAIN] = store_result
+    hass.data[DATA_STORE] = store_result
 
     hass.http.register_view(TokenView(retrieve_result))
     hass.http.register_view(RevokeTokenView())
@@ -188,10 +192,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, websocket_create_long_lived_access_token)
     websocket_api.async_register_command(hass, websocket_refresh_tokens)
     websocket_api.async_register_command(hass, websocket_delete_refresh_token)
+    websocket_api.async_register_command(hass, websocket_delete_all_refresh_tokens)
     websocket_api.async_register_command(hass, websocket_sign_path)
+    websocket_api.async_register_command(hass, websocket_refresh_token_set_expiry)
 
-    await login_flow.async_setup(hass, store_result)
-    await mfa_setup_flow.async_setup(hass)
+    login_flow.async_setup(hass, store_result)
+    mfa_setup_flow.async_setup(hass)
 
     return True
 
@@ -206,7 +212,7 @@ class RevokeTokenView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Revoke a token."""
-        hass: HomeAssistant = request.app["hass"]
+        hass = request.app[KEY_HASS]
         data = cast(MultiDictProxy[str], await request.post())
 
         # OAuth 2.0 Token Revocation [RFC7009]
@@ -216,12 +222,12 @@ class RevokeTokenView(HomeAssistantView):
         if (token := data.get("token")) is None:
             return web.Response(status=HTTPStatus.OK)
 
-        refresh_token = await hass.auth.async_get_refresh_token_by_token(token)
+        refresh_token = hass.auth.async_get_refresh_token_by_token(token)
 
         if refresh_token is None:
             return web.Response(status=HTTPStatus.OK)
 
-        await hass.auth.async_remove_refresh_token(refresh_token)
+        hass.auth.async_remove_refresh_token(refresh_token)
         return web.Response(status=HTTPStatus.OK)
 
 
@@ -240,7 +246,7 @@ class TokenView(HomeAssistantView):
     @log_invalid_auth
     async def post(self, request: web.Request) -> web.Response:
         """Grant a token."""
-        hass: HomeAssistant = request.app["hass"]
+        hass = request.app[KEY_HASS]
         data = cast(MultiDictProxy[str], await request.post())
 
         grant_type = data.get("grant_type")
@@ -255,10 +261,10 @@ class TokenView(HomeAssistantView):
             return await RevokeTokenView.post(self, request)  # type: ignore[arg-type]
 
         if grant_type == "authorization_code":
-            return await self._async_handle_auth_code(hass, data, request.remote)
+            return await self._async_handle_auth_code(hass, data, request)
 
         if grant_type == "refresh_token":
-            return await self._async_handle_refresh_token(hass, data, request.remote)
+            return await self._async_handle_refresh_token(hass, data, request)
 
         return self.json(
             {"error": "unsupported_grant_type"}, status_code=HTTPStatus.BAD_REQUEST
@@ -268,7 +274,7 @@ class TokenView(HomeAssistantView):
         self,
         hass: HomeAssistant,
         data: MultiDictProxy[str],
-        remote_addr: str | None,
+        request: web.Request,
     ) -> web.Response:
         """Handle authorization code request."""
         client_id = data.get("client_id")
@@ -308,7 +314,7 @@ class TokenView(HomeAssistantView):
         )
         try:
             access_token = hass.auth.async_create_access_token(
-                refresh_token, remote_addr
+                refresh_token, request.remote
             )
         except InvalidAuthError as exc:
             return self.json(
@@ -336,9 +342,9 @@ class TokenView(HomeAssistantView):
         self,
         hass: HomeAssistant,
         data: MultiDictProxy[str],
-        remote_addr: str | None,
+        request: web.Request,
     ) -> web.Response:
-        """Handle authorization code request."""
+        """Handle refresh token request."""
         client_id = data.get("client_id")
         if client_id is not None and not indieauth.verify_client_id(client_id):
             return self.json(
@@ -351,7 +357,7 @@ class TokenView(HomeAssistantView):
                 {"error": "invalid_request"}, status_code=HTTPStatus.BAD_REQUEST
             )
 
-        refresh_token = await hass.auth.async_get_refresh_token_by_token(token)
+        refresh_token = hass.auth.async_get_refresh_token_by_token(token)
 
         if refresh_token is None:
             return self.json(
@@ -376,7 +382,7 @@ class TokenView(HomeAssistantView):
 
         try:
             access_token = hass.auth.async_create_access_token(
-                refresh_token, remote_addr
+                refresh_token, request.remote
             )
         except InvalidAuthError as exc:
             return self.json(
@@ -409,10 +415,10 @@ class LinkUserView(HomeAssistantView):
         """Initialize the link user view."""
         self._retrieve_credentials = retrieve_credentials
 
-    @RequestDataValidator(vol.Schema({"code": str, "client_id": str}))
+    @RequestDataValidator(probatio.Schema({"code": str, "client_id": str}))
     async def post(self, request: web.Request, data: dict[str, Any]) -> web.Response:
         """Link a user."""
-        hass: HomeAssistant = request.app["hass"]
+        hass = request.app[KEY_HASS]
         user: User = request["hass_user"]
 
         credentials = self._retrieve_credentials(data["client_id"], data["code"])
@@ -472,7 +478,7 @@ def _create_auth_code_store() -> tuple[StoreResultType, RetrieveResultType]:
     return store_result, retrieve_result
 
 
-@websocket_api.websocket_command({vol.Required("type"): "auth/current_user"})
+@websocket_api.websocket_command({probatio.Required("type"): "auth/current_user"})
 @websocket_api.ws_require_user()
 @websocket_api.async_response
 async def websocket_current_user(
@@ -512,10 +518,10 @@ async def websocket_current_user(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "auth/long_lived_access_token",
-        vol.Required("lifespan"): int,  # days
-        vol.Required("client_name"): str,
-        vol.Optional("client_icon"): str,
+        probatio.Required("type"): "auth/long_lived_access_token",
+        probatio.Required("lifespan"): int,  # days
+        probatio.Required("client_name"): str,
+        probatio.Optional("client_icon"): str,
     }
 )
 @websocket_api.ws_require_user()
@@ -535,13 +541,13 @@ async def websocket_create_long_lived_access_token(
     try:
         access_token = hass.auth.async_create_access_token(refresh_token)
     except InvalidAuthError as exc:
-        connection.send_error(msg["id"], websocket_api.const.ERR_UNAUTHORIZED, str(exc))
+        connection.send_error(msg["id"], websocket_api.ERR_UNAUTHORIZED, str(exc))
         return
 
     connection.send_result(msg["id"], access_token)
 
 
-@websocket_api.websocket_command({vol.Required("type"): "auth/refresh_tokens"})
+@websocket_api.websocket_command({probatio.Required("type"): "auth/refresh_tokens"})
 @websocket_api.ws_require_user()
 @callback
 def websocket_refresh_tokens(
@@ -557,33 +563,38 @@ def websocket_refresh_tokens(
         else:
             auth_provider_type = None
 
+        expire_at = None
+        if refresh.expire_at:
+            expire_at = dt_util.utc_from_timestamp(refresh.expire_at)
+
         tokens.append(
             {
-                "id": refresh.id,
+                "auth_provider_type": auth_provider_type,
+                "client_icon": refresh.client_icon,
                 "client_id": refresh.client_id,
                 "client_name": refresh.client_name,
-                "client_icon": refresh.client_icon,
-                "type": refresh.token_type,
                 "created_at": refresh.created_at,
+                "expire_at": expire_at,
+                "id": refresh.id,
                 "is_current": refresh.id == current_id,
                 "last_used_at": refresh.last_used_at,
                 "last_used_ip": refresh.last_used_ip,
-                "auth_provider_type": auth_provider_type,
+                "type": refresh.token_type,
             }
         )
 
     connection.send_result(msg["id"], tokens)
 
 
+@callback
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "auth/delete_refresh_token",
-        vol.Required("refresh_token_id"): str,
+        probatio.Required("type"): "auth/delete_refresh_token",
+        probatio.Required("refresh_token_id"): str,
     }
 )
 @websocket_api.ws_require_user()
-@websocket_api.async_response
-async def websocket_delete_refresh_token(
+def websocket_delete_refresh_token(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
     """Handle a delete refresh token request."""
@@ -593,16 +604,89 @@ async def websocket_delete_refresh_token(
         connection.send_error(msg["id"], "invalid_token_id", "Received invalid token")
         return
 
-    await hass.auth.async_remove_refresh_token(refresh_token)
+    hass.auth.async_remove_refresh_token(refresh_token)
 
     connection.send_result(msg["id"], {})
 
 
+@callback
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "auth/sign_path",
-        vol.Required("path"): str,
-        vol.Optional("expires", default=30): int,
+        probatio.Required("type"): "auth/delete_all_refresh_tokens",
+        probatio.Optional("token_type"): cv.string,
+        probatio.Optional("delete_current_token", default=True): bool,
+    }
+)
+@websocket_api.ws_require_user()
+def websocket_delete_all_refresh_tokens(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Handle delete all refresh tokens request."""
+    current_refresh_token: RefreshToken | None = None
+    remove_failed = False
+    token_type = msg.get("token_type")
+    delete_current_token = msg.get("delete_current_token")
+    limit_token_types = token_type is not None
+
+    for token in list(connection.user.refresh_tokens.values()):
+        if token.id == connection.refresh_token_id:
+            # Skip the current refresh token as it has revoke_callback,
+            # which cancels/closes the connection.
+            # It will be removed after sending the result.
+            current_refresh_token = token
+            continue
+        if limit_token_types and token_type != token.token_type:
+            continue
+        try:
+            hass.auth.async_remove_refresh_token(token)
+        except Exception:
+            getLogger(__name__).exception("Error during refresh token removal")
+            remove_failed = True
+
+    if remove_failed:
+        connection.send_error(
+            msg["id"], "token_removing_error", "During removal, an error was raised."
+        )
+    else:
+        connection.send_result(msg["id"], {})
+
+    async def _delete_current_token_soon(current_refresh_token: RefreshToken) -> None:
+        """Delete the current token after a delay.
+
+        We do not want to delete the current token immediately as it will
+        close the connection.
+
+        This is implemented as a tracked task to ensure the token
+        is still deleted if Home Assistant is shut down during
+        the delay.
+
+        It should not be refactored to use a call_later as that
+        would not be tracked and the token would not be deleted
+        if Home Assistant was shut down during the delay.
+        """
+        try:
+            await asyncio.sleep(DELETE_CURRENT_TOKEN_DELAY)
+        finally:
+            # If the task is cancelled because we are shutting down, delete
+            # the token right away.
+            hass.auth.async_remove_refresh_token(current_refresh_token)
+
+    if (
+        delete_current_token
+        and current_refresh_token
+        and (not limit_token_types or current_refresh_token.token_type == token_type)
+    ):
+        # Deleting the token will close the connection so we need
+        # to do it with a delay in a tracked task to ensure it still
+        # happens if Home Assistant is shutting down.
+        hass.async_create_task(_delete_current_token_soon(current_refresh_token))
+
+
+@websocket_api.websocket_command(
+    {
+        probatio.Required("type"): "auth/sign_path",
+        probatio.Required("path"): str,
+        probatio.Optional("expires", default=30): int,
     }
 )
 @websocket_api.ws_require_user()
@@ -623,3 +707,26 @@ def websocket_sign_path(
             },
         )
     )
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        probatio.Required("type"): "auth/refresh_token_set_expiry",
+        probatio.Required("refresh_token_id"): str,
+        probatio.Required("enable_expiry"): bool,
+    }
+)
+@websocket_api.ws_require_user()
+def websocket_refresh_token_set_expiry(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Handle a set expiry of a refresh token request."""
+    refresh_token = connection.user.refresh_tokens.get(msg["refresh_token_id"])
+
+    if refresh_token is None:
+        connection.send_error(msg["id"], "invalid_token_id", "Received invalid token")
+        return
+
+    hass.auth.async_set_expiry(refresh_token, enable_expiry=msg["enable_expiry"])
+    connection.send_result(msg["id"], {})

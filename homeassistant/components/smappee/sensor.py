@@ -1,7 +1,7 @@
 """Support for monitoring a Smappee energy sensor."""
-from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import override
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -9,35 +9,30 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfElectricPotential, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from . import SmappeeConfigEntry
 from .const import DOMAIN
 
 
-@dataclass
-class SmappeeRequiredKeysMixin:
-    """Mixin for required keys."""
+@dataclass(frozen=True, kw_only=True)
+class SmappeeSensorEntityDescription(SensorEntityDescription):
+    """Describes Smappee sensor entity."""
 
     sensor_id: str
 
 
-@dataclass
-class SmappeeSensorEntityDescription(SensorEntityDescription, SmappeeRequiredKeysMixin):
-    """Describes Smappee sensor entity."""
-
-
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class SmappeePollingSensorEntityDescription(SmappeeSensorEntityDescription):
     """Describes Smappee sensor entity."""
 
     local_polling: bool = False
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class SmappeeVoltageSensorEntityDescription(SmappeeSensorEntityDescription):
     """Describes Smappee sensor entity."""
 
@@ -192,11 +187,11 @@ VOLTAGE_SENSORS: tuple[SmappeeVoltageSensorEntityDescription, ...] = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: SmappeeConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the Smappee sensor."""
-    smappee_base = hass.data[DOMAIN][config_entry.entry_id]
+    smappee_base = config_entry.runtime_data
 
     entities = []
     for service_location in smappee_base.smappee.service_locations.values():
@@ -341,8 +336,16 @@ class SmappeeSensor(SensorEntity):
         self.entity_description = description
         self._smappee_base = smappee_base
         self._service_location = service_location
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, service_location.device_serial_number)},
+            manufacturer="Smappee",
+            model=service_location.device_model,
+            name=service_location.service_location_name,
+            sw_version=service_location.firmware_version,
+        )
 
     @property
+    @override
     def name(self):
         """Return the name for this sensor."""
         sensor_key = self.entity_description.key
@@ -356,6 +359,7 @@ class SmappeeSensor(SensorEntity):
         return f"{self._service_location.service_location_name} - {sensor_name}"
 
     @property
+    @override
     def unique_id(self):
         """Return the unique ID for this sensor."""
         sensor_key = self.entity_description.key
@@ -370,17 +374,6 @@ class SmappeeSensor(SensorEntity):
             f"{self._service_location.device_serial_number}-"
             f"{self._service_location.service_location_id}-"
             f"{sensor_key}"
-        )
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return the device info for this sensor."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._service_location.device_serial_number)},
-            manufacturer="Smappee",
-            model=self._service_location.device_model,
-            name=self._service_location.service_location_name,
-            sw_version=self._service_location.firmware_version,
         )
 
     async def async_update(self) -> None:

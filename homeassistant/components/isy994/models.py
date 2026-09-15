@@ -1,5 +1,4 @@
 """The ISY/IoX integration data models."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import cast
@@ -11,8 +10,9 @@ from pyisy.nodes import Group, Node
 from pyisy.programs import Program
 from pyisy.variables import Variable
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
     CONF_NETWORK,
@@ -22,6 +22,8 @@ from .const import (
     ROOT_NODE_PLATFORMS,
     VARIABLE_PLATFORMS,
 )
+
+type IsyConfigEntry = ConfigEntry[IsyData]
 
 
 @dataclass

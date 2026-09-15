@@ -1,48 +1,34 @@
 """Number support for Melnor Bluetooth water timer."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import time
-from typing import Any
+from typing import Any, override
 
 from melnor_bluetooth.device import Valve
 
 from homeassistant.components.time import TimeEntity, TimeEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN
-from .models import (
-    MelnorDataUpdateCoordinator,
-    MelnorZoneEntity,
-    get_entities_for_valves,
-)
+from .coordinator import MelnorConfigEntry, MelnorDataUpdateCoordinator
+from .entity import MelnorZoneEntity, get_entities_for_valves
 
 
-@dataclass
-class MelnorZoneTimeEntityDescriptionMixin:
-    """Mixin for required keys."""
+@dataclass(frozen=True, kw_only=True)
+class MelnorZoneTimeEntityDescription(TimeEntityDescription):
+    """Describes Melnor number entity."""
 
     set_time_fn: Callable[[Valve, time], Coroutine[Any, Any, None]]
     state_fn: Callable[[Valve], Any]
-
-
-@dataclass
-class MelnorZoneTimeEntityDescription(
-    TimeEntityDescription, MelnorZoneTimeEntityDescriptionMixin
-):
-    """Describes Melnor number entity."""
 
 
 ZONE_ENTITY_DESCRIPTIONS: list[MelnorZoneTimeEntityDescription] = [
     MelnorZoneTimeEntityDescription(
         entity_category=EntityCategory.CONFIG,
         key="frequency_start_time",
-        name="Schedule Start Time",
+        translation_key="frequency_start_time",
         set_time_fn=lambda valve, value: valve.set_frequency_start_time(value),
         state_fn=lambda valve: valve.frequency.start_time,
     ),
@@ -51,12 +37,12 @@ ZONE_ENTITY_DESCRIPTIONS: list[MelnorZoneTimeEntityDescription] = [
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: MelnorConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the number platform."""
 
-    coordinator: MelnorDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+    coordinator = config_entry.runtime_data
 
     async_add_entities(
         get_entities_for_valves(
@@ -82,10 +68,12 @@ class MelnorZoneTime(MelnorZoneEntity, TimeEntity):
         super().__init__(coordinator, entity_description, valve)
 
     @property
+    @override
     def native_value(self) -> time | None:
         """Return the current value."""
         return self.entity_description.state_fn(self._valve)
 
+    @override
     async def async_set_value(self, value: time) -> None:
         """Update the current value."""
         await self.entity_description.set_time_fn(self._valve, value)

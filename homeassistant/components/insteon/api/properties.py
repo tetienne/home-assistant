@@ -2,8 +2,14 @@
 
 from typing import Any
 
+import probatio
 from pyinsteon import devices
-from pyinsteon.config import RADIO_BUTTON_GROUPS, RAMP_RATE_IN_SEC, get_usable_value
+from pyinsteon.config import (
+    LOAD_BUTTON,
+    RADIO_BUTTON_GROUPS,
+    RAMP_RATE_IN_SEC,
+    get_usable_value,
+)
 from pyinsteon.constants import (
     RAMP_RATES_SEC,
     PropertyType,
@@ -12,12 +18,10 @@ from pyinsteon.constants import (
     ToggleMode,
 )
 from pyinsteon.device_types.device_base import Device
-import voluptuous as vol
-import voluptuous_serialize
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 
 from ..const import (
     DEVICE_ADDRESS,
@@ -38,50 +42,55 @@ RELAY_MODES = [str(RelayMode(v)).lower() for v in list(RelayMode)]
 
 
 def _bool_schema(name):
-    return voluptuous_serialize.convert(vol.Schema({vol.Required(name): bool}))[0]
+    return probatio.to_field_list(probatio.Schema({probatio.Required(name): bool}))[0]
 
 
 def _byte_schema(name):
-    return voluptuous_serialize.convert(vol.Schema({vol.Required(name): cv.byte}))[0]
+    return probatio.to_field_list(probatio.Schema({probatio.Required(name): cv.byte}))[
+        0
+    ]
 
 
 def _float_schema(name):
-    return voluptuous_serialize.convert(vol.Schema({vol.Required(name): float}))[0]
+    return probatio.to_field_list(probatio.Schema({probatio.Required(name): float}))[0]
 
 
 def _list_schema(name, values):
-    return voluptuous_serialize.convert(
-        vol.Schema({vol.Required(name): vol.In(values)}),
+    return probatio.to_field_list(
+        probatio.Schema({probatio.Required(name): probatio.In(values)}),
         custom_serializer=cv.custom_serializer,
     )[0]
 
 
 def _multi_select_schema(name, values):
-    return voluptuous_serialize.convert(
-        vol.Schema({vol.Optional(name): cv.multi_select(values)}),
+    return probatio.to_field_list(
+        probatio.Schema({probatio.Optional(name): cv.multi_select(values)}),
         custom_serializer=cv.custom_serializer,
     )[0]
 
 
 def _read_only_schema(name, value):
     """Return a constant value schema."""
-    return voluptuous_serialize.convert(vol.Schema({vol.Required(name): value}))[0]
+    return probatio.to_field_list(probatio.Schema({probatio.Required(name): value}))[0]
 
 
 def get_schema(prop, name, groups):
-    """Return the correct shema type."""
+    """Return the correct schema type."""
     if prop.is_read_only:
         return _read_only_schema(name, prop.value)
     if name == RAMP_RATE_IN_SEC:
         return _list_schema(name, RAMP_RATE_LIST)
     if name == RADIO_BUTTON_GROUPS:
-        button_list = {str(group): groups[group].name for group in groups if group != 1}
+        button_list = {str(group): groups[group].name for group in groups}
         return _multi_select_schema(name, button_list)
-    if prop.value_type == bool:
+    if name == LOAD_BUTTON:
+        button_list = {group: groups[group].name for group in groups}
+        return _list_schema(name, button_list)
+    if prop.value_type is bool:
         return _bool_schema(name)
-    if prop.value_type == int:
+    if prop.value_type is int:
         return _byte_schema(name)
-    if prop.value_type == float:
+    if prop.value_type is float:
         return _float_schema(name)
     if prop.value_type == ToggleMode:
         return _list_schema(name, TOGGLE_MODES)
@@ -131,8 +140,7 @@ def property_to_dict(prop):
     modified = value == prop.new_value
     if prop.value_type in [ToggleMode, RelayMode] or prop.name == RAMP_RATE_IN_SEC:
         value = str(value).lower()
-    prop_dict = {"name": prop.name, "value": value, "modified": modified}
-    return prop_dict
+    return {"name": prop.name, "value": value, "modified": modified}
 
 
 def update_property(device, prop_name, value):
@@ -150,9 +158,9 @@ def update_property(device, prop_name, value):
 
 @websocket_api.websocket_command(
     {
-        vol.Required(TYPE): "insteon/properties/get",
-        vol.Required(DEVICE_ADDRESS): str,
-        vol.Required(SHOW_ADVANCED): bool,
+        probatio.Required(TYPE): "insteon/properties/get",
+        probatio.Required(DEVICE_ADDRESS): str,
+        probatio.Required(SHOW_ADVANCED): bool,
     }
 )
 @websocket_api.require_admin
@@ -174,10 +182,10 @@ async def websocket_get_properties(
 
 @websocket_api.websocket_command(
     {
-        vol.Required(TYPE): "insteon/properties/change",
-        vol.Required(DEVICE_ADDRESS): str,
-        vol.Required(PROPERTY_NAME): str,
-        vol.Required(PROPERTY_VALUE): vol.Any(list, int, float, bool, str),
+        probatio.Required(TYPE): "insteon/properties/change",
+        probatio.Required(DEVICE_ADDRESS): str,
+        probatio.Required(PROPERTY_NAME): str,
+        probatio.Required(PROPERTY_VALUE): probatio.Any(list, int, float, bool, str),
     }
 )
 @websocket_api.require_admin
@@ -198,8 +206,8 @@ async def websocket_change_properties_record(
 
 @websocket_api.websocket_command(
     {
-        vol.Required(TYPE): "insteon/properties/write",
-        vol.Required(DEVICE_ADDRESS): str,
+        probatio.Required(TYPE): "insteon/properties/write",
+        probatio.Required(DEVICE_ADDRESS): str,
     }
 )
 @websocket_api.require_admin
@@ -228,8 +236,8 @@ async def websocket_write_properties(
 
 @websocket_api.websocket_command(
     {
-        vol.Required(TYPE): "insteon/properties/load",
-        vol.Required(DEVICE_ADDRESS): str,
+        probatio.Required(TYPE): "insteon/properties/load",
+        probatio.Required(DEVICE_ADDRESS): str,
     }
 )
 @websocket_api.require_admin
@@ -259,8 +267,8 @@ async def websocket_load_properties(
 
 @websocket_api.websocket_command(
     {
-        vol.Required(TYPE): "insteon/properties/reset",
-        vol.Required(DEVICE_ADDRESS): str,
+        probatio.Required(TYPE): "insteon/properties/reset",
+        probatio.Required(DEVICE_ADDRESS): str,
     }
 )
 @websocket_api.require_admin
@@ -275,6 +283,8 @@ async def websocket_reset_properties(
         notify_device_not_found(connection, msg, INSTEON_DEVICE_NOT_FOUND)
         return
 
+    for prop in device.configuration.values():
+        prop.new_value = None
     for prop in device.operating_flags:
         device.operating_flags[prop].new_value = None
     for prop in device.properties:

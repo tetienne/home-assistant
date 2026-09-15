@@ -1,4 +1,5 @@
 """Tests for Plex media browser."""
+
 from http import HTTPStatus
 from unittest.mock import Mock, patch
 
@@ -10,7 +11,7 @@ from homeassistant.components.media_player import (
     ATTR_MEDIA_CONTENT_TYPE,
 )
 from homeassistant.components.plex.const import CONF_SERVER_IDENTIFIER, PLEX_URI_SCHEME
-from homeassistant.components.websocket_api.const import ERR_UNKNOWN_ERROR, TYPE_RESULT
+from homeassistant.components.websocket_api import ERR_UNKNOWN_ERROR, TYPE_RESULT
 from homeassistant.core import HomeAssistant
 
 from .const import DEFAULT_DATA
@@ -120,6 +121,7 @@ async def test_browse_media(
     requests_mock: requests_mock.Mocker,
     hubs,
     hubs_music_library,
+    media_1: str,
 ) -> None:
     """Test getting Plex clients from plex.tv."""
     websocket_client = await hass_ws_client(hass)
@@ -158,6 +160,10 @@ async def test_browse_media(
     requests_mock.get(
         f"{mock_plex_server.url_in_use}/hubs",
         text=hubs,
+    )
+    requests_mock.get(
+        f"{mock_plex_server.url_in_use}/hubs/home/continueWatching?includeGuids=1",
+        text=media_1,
     )
 
     # Browse into a special folder (server)
@@ -226,7 +232,8 @@ async def test_browse_media(
             "entity_id": media_players[0],
             ATTR_MEDIA_CONTENT_TYPE: "library",
             ATTR_MEDIA_CONTENT_ID: PLEX_URI_SCHEME
-            + f"{DEFAULT_DATA[CONF_SERVER_IDENTIFIER]}/{library_section_id}/{special_keys[0]}",
+            + f"{DEFAULT_DATA[CONF_SERVER_IDENTIFIER]}"
+            + f"/{library_section_id}/{special_keys[0]}",
         }
     )
 
@@ -239,7 +246,8 @@ async def test_browse_media(
     assert (
         result[ATTR_MEDIA_CONTENT_ID]
         == PLEX_URI_SCHEME
-        + f"{DEFAULT_DATA[CONF_SERVER_IDENTIFIER]}/{library_section_id}/{special_keys[0]}"
+        + f"{DEFAULT_DATA[CONF_SERVER_IDENTIFIER]}"
+        + f"/{library_section_id}/{special_keys[0]}"
     )
     assert len(result["children"]) == 1
 

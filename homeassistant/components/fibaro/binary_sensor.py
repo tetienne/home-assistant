@@ -1,8 +1,7 @@
 """Support for Fibaro binary sensors."""
-from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, cast, override
 
 from pyfibaro.fibaro_device import DeviceModel
 
@@ -11,13 +10,12 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import FIBARO_DEVICES, FibaroDevice
-from .const import DOMAIN
+from . import FibaroConfigEntry
+from .entity import FibaroEntity
 
 SENSOR_TYPES = {
     "com.fibaro.floodSensor": ["Flood", "mdi:water", BinarySensorDeviceClass.MOISTURE],
@@ -41,22 +39,21 @@ SENSOR_TYPES = {
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: FibaroConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Perform the setup for Fibaro controller devices."""
+    controller = entry.runtime_data
     async_add_entities(
         [
             FibaroBinarySensor(device)
-            for device in hass.data[DOMAIN][entry.entry_id][FIBARO_DEVICES][
-                Platform.BINARY_SENSOR
-            ]
+            for device in controller.fibaro_devices[Platform.BINARY_SENSOR]
         ],
         True,
     )
 
 
-class FibaroBinarySensor(FibaroDevice, BinarySensorEntity):
+class FibaroBinarySensor(FibaroEntity, BinarySensorEntity):
     """Representation of a Fibaro Binary Sensor."""
 
     def __init__(self, fibaro_device: DeviceModel) -> None:
@@ -76,10 +73,12 @@ class FibaroBinarySensor(FibaroDevice, BinarySensorEntity):
             self._attr_icon = SENSOR_TYPES[self._fibaro_sensor_type][1]
 
     @property
-    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+    @override
+    def extra_state_attributes(self) -> Mapping[str, Any]:
         """Return the extra state attributes of the device."""
-        return super().extra_state_attributes | self._own_extra_state_attributes
+        return {**super().extra_state_attributes, **self._own_extra_state_attributes}
 
+    @override
     def update(self) -> None:
         """Get the latest data and update the state."""
         super().update()

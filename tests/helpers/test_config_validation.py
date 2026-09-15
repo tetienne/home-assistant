@@ -1,41 +1,52 @@
 """Test config validators."""
+
 from collections import OrderedDict
-from datetime import date, datetime, timedelta
+from collections.abc import Callable
+from datetime import date, timedelta
 import enum
+from functools import partial
+import logging
 import os
+import re
 from socket import _GLOBAL_DEFAULT_TIMEOUT
-from unittest.mock import Mock, patch
+import threading
+from typing import Any
+from unittest.mock import ANY, Mock, patch
 import uuid
 
+import probatio
+import py
 import pytest
-import voluptuous as vol
 
 import homeassistant
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
     issue_registry as ir,
     selector,
     template,
 )
+from homeassistant.helpers.config_validation import TRIGGER_SCHEMA
+from homeassistant.util import dt as dt_util
 
 
 def test_boolean() -> None:
     """Test boolean validation."""
-    schema = vol.Schema(cv.boolean)
+    schema = probatio.Schema(cv.boolean)
 
     for value in (
         None,
         "T",
         "negative",
         "lock",
-        "tr  ue",
+        "tr  ue",  # codespell:ignore ue
         [],
         [1, 2],
         {"one": "two"},
         test_boolean,
     ):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("true", "On", "1", "YES", "   true  ", "enable", 1, 50, True, 0.1):
@@ -47,10 +58,10 @@ def test_boolean() -> None:
 
 def test_latitude() -> None:
     """Test latitude validation."""
-    schema = vol.Schema(cv.latitude)
+    schema = probatio.Schema(cv.latitude)
 
     for value in ("invalid", None, -91, 91, "-91", "91", "123.01A"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("-89", 89, "12.34"):
@@ -59,10 +70,10 @@ def test_latitude() -> None:
 
 def test_longitude() -> None:
     """Test longitude validation."""
-    schema = vol.Schema(cv.longitude)
+    schema = probatio.Schema(cv.longitude)
 
     for value in ("invalid", None, -181, 181, "-181", "181", "123.01A"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("-179", 179, "12.34"):
@@ -71,10 +82,10 @@ def test_longitude() -> None:
 
 def test_port() -> None:
     """Test TCP/UDP network port."""
-    schema = vol.Schema(cv.port)
+    schema = probatio.Schema(cv.port)
 
     for value in ("invalid", None, -1, 0, 80000, "81000"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("1000", 21, 24574):
@@ -83,26 +94,27 @@ def test_port() -> None:
 
 def test_isfile() -> None:
     """Validate that the value is an existing file."""
-    schema = vol.Schema(cv.isfile)
+    schema = probatio.Schema(cv.isfile)
 
     fake_file = "this-file-does-not.exist"
     assert not os.path.isfile(fake_file)
 
     for value in ("invalid", None, -1, 0, 80000, fake_file):
-        with pytest.raises(vol.Invalid):
+        with pytest.raises(probatio.Invalid):
             schema(value)
 
     # patching methods that allow us to fake a file existing
     # with write access
-    with patch("os.path.isfile", Mock(return_value=True)), patch(
-        "os.access", Mock(return_value=True)
+    with (
+        patch("os.path.isfile", Mock(return_value=True)),
+        patch("os.access", Mock(return_value=True)),
     ):
         schema("test.txt")
 
 
 def test_url() -> None:
     """Test URL."""
-    schema = vol.Schema(cv.url)
+    schema = probatio.Schema(cv.url)
 
     for value in (
         "invalid",
@@ -113,7 +125,7 @@ def test_url() -> None:
         "http://??,**",
         "https://??,**",
     ):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in (
@@ -126,15 +138,45 @@ def test_url() -> None:
         assert schema(value)
 
 
+def test_configuration_url() -> None:
+    """Test URL."""
+    schema = probatio.Schema(cv.configuration_url)
+
+    for value in (
+        "invalid",
+        None,
+        100,
+        "htp://ha.io",
+        "http//ha.io",
+        "http://??,**",
+        "https://??,**",
+        "homeassistant://??,**",
+    ):
+        with pytest.raises(probatio.MultipleInvalid):
+            schema(value)
+
+    for value in (
+        "http://localhost",
+        "https://localhost/test/index.html",
+        "http://home-assistant.io",
+        "http://home-assistant.io/test/",
+        "https://community.home-assistant.io/",
+        "homeassistant://api",
+        "homeassistant://api/hassio_ingress/XXXXXXX",
+    ):
+        assert schema(value)
+
+
 def test_url_no_path() -> None:
     """Test URL."""
-    schema = vol.Schema(cv.url_no_path)
+    schema = probatio.Schema(cv.url_no_path)
 
     for value in (
         "https://localhost/test/index.html",
         "http://home-assistant.io/test/",
+        "http://invalid-port.local:999999",
     ):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in (
@@ -149,7 +191,7 @@ def test_platform_config() -> None:
     """Test platform config validation."""
     options = ({}, {"hello": "world"})
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             cv.PLATFORM_SCHEMA(value)
 
     options = ({"platform": "mqtt"}, {"platform": "mqtt", "beer": "yes"})
@@ -159,20 +201,20 @@ def test_platform_config() -> None:
 
 def test_ensure_list() -> None:
     """Test ensure_list."""
-    schema = vol.Schema(cv.ensure_list)
-    assert [] == schema(None)
-    assert [1] == schema(1)
-    assert [1] == schema([1])
-    assert ["1"] == schema("1")
-    assert ["1"] == schema(["1"])
-    assert [{"1": "2"}] == schema({"1": "2"})
+    schema = probatio.Schema(cv.ensure_list)
+    assert schema(None) == []
+    assert schema(1) == [1]
+    assert schema([1]) == [1]
+    assert schema("1") == ["1"]
+    assert schema(["1"]) == ["1"]
+    assert schema({"1": "2"}) == [{"1": "2"}]
 
 
 def test_entity_id() -> None:
     """Test entity ID validation."""
-    schema = vol.Schema(cv.entity_id)
+    schema = probatio.Schema(cv.entity_id)
 
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema("invalid_entity")
 
     assert schema("sensor.LIGHT") == "sensor.light"
@@ -181,7 +223,7 @@ def test_entity_id() -> None:
 @pytest.mark.parametrize("validator", [cv.entity_ids, cv.entity_ids_or_uuids])
 def test_entity_ids(validator) -> None:
     """Test entity ID validation."""
-    schema = vol.Schema(validator)
+    schema = probatio.Schema(validator)
 
     options = (
         "invalid_entity",
@@ -191,7 +233,7 @@ def test_entity_ids(validator) -> None:
         ["sensor.light,sensor_invalid"],
     )
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     options = ([], ["sensor.light"], "sensor.light")
@@ -203,7 +245,7 @@ def test_entity_ids(validator) -> None:
 
 def test_entity_ids_or_uuids() -> None:
     """Test entity ID validation."""
-    schema = vol.Schema(cv.entity_ids_or_uuids)
+    schema = probatio.Schema(cv.entity_ids_or_uuids)
 
     valid_uuid = "a266a680b608c32770e6c45bfe6b8411"
     valid_uuid2 = "a266a680b608c32770e6c45bfe6b8412"
@@ -217,7 +259,7 @@ def test_entity_ids_or_uuids() -> None:
         [f"{valid_uuid},invalid_uuid"],
     )
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     options = ([], [valid_uuid], valid_uuid)
@@ -229,7 +271,7 @@ def test_entity_ids_or_uuids() -> None:
 
 def test_entity_domain() -> None:
     """Test entity domain validation."""
-    schema = vol.Schema(cv.entity_domain("sensor"))
+    schema = probatio.Schema(cv.entity_domain("sensor"))
 
     for value in (
         "invalid_entity",
@@ -237,15 +279,15 @@ def test_entity_domain() -> None:
         "cover.demo,sensor.another_entity",
         "",
     ):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     assert schema("sensor.LIGHT") == "sensor.light"
 
-    schema = vol.Schema(cv.entity_domain(("sensor", "binary_sensor")))
+    schema = probatio.Schema(cv.entity_domain(("sensor", "binary_sensor")))
 
     for value in ("invalid_entity", "cover.demo"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     assert schema("sensor.LIGHT") == "sensor.light"
@@ -254,7 +296,7 @@ def test_entity_domain() -> None:
 
 def test_entities_domain() -> None:
     """Test entities domain validation."""
-    schema = vol.Schema(cv.entities_domain("sensor"))
+    schema = probatio.Schema(cv.entities_domain("sensor"))
 
     options = (
         None,
@@ -265,7 +307,7 @@ def test_entities_domain() -> None:
     )
 
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     options = ("sensor.light", ["SENSOR.light"], ["sensor.light", "sensor.demo"])
@@ -278,7 +320,7 @@ def test_entities_domain() -> None:
 
 def test_ensure_list_csv() -> None:
     """Test ensure_list_csv."""
-    schema = vol.Schema(cv.ensure_list_csv)
+    schema = probatio.Schema(cv.ensure_list_csv)
 
     options = (None, 12, [], ["string"], "string1,string2")
     for value in options:
@@ -296,7 +338,7 @@ def test_event_schema() -> None:
         {"event": "state_changed", "event_data": 1},
     )
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             cv.EVENT_SCHEMA(value)
 
     options = (
@@ -309,10 +351,10 @@ def test_event_schema() -> None:
 
 def test_icon() -> None:
     """Test icon validation."""
-    schema = vol.Schema(cv.icon)
+    schema = probatio.Schema(cv.icon)
 
     for value in (False, "work"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     schema("mdi:work")
@@ -321,7 +363,7 @@ def test_icon() -> None:
 
 def test_time_period() -> None:
     """Test time_period validation."""
-    schema = vol.Schema(cv.time_period)
+    schema = probatio.Schema(cv.time_period)
 
     options = (
         None,
@@ -337,7 +379,7 @@ def test_time_period() -> None:
         "12:30.5:30",
     )
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     options = (
@@ -375,35 +417,17 @@ def test_remove_falsy() -> None:
 
 def test_service() -> None:
     """Test service validation."""
-    schema = vol.Schema(cv.service)
+    schema = probatio.Schema(cv.service)
 
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema("invalid_turn_on")
 
     schema("homeassistant.turn_on")
 
 
-def test_service_schema() -> None:
-    """Test service_schema validation."""
-    options = (
-        {},
-        None,
-        {
-            "service": "homeassistant.turn_on",
-            "service_template": "homeassistant.turn_on",
-        },
-        {"data": {"entity_id": "light.kitchen"}},
-        {"service": "homeassistant.turn_on", "data": None},
-        {
-            "service": "homeassistant.turn_on",
-            "data_template": {"brightness": "{{ no_end"},
-        },
-    )
-    for value in options:
-        with pytest.raises(vol.MultipleInvalid):
-            cv.SERVICE_SCHEMA(value)
-
-    options = (
+@pytest.mark.parametrize(
+    "config",
+    [
         {"service": "homeassistant.turn_on"},
         {"service": "homeassistant.turn_on", "entity_id": "light.kitchen"},
         {"service": "light.turn_on", "entity_id": "all"},
@@ -417,20 +441,79 @@ def test_service_schema() -> None:
             "alias": "turn on kitchen lights",
         },
         {"service": "scene.turn_on", "metadata": {}},
-    )
-    for value in options:
-        cv.SERVICE_SCHEMA(value)
+        {"action": "homeassistant.turn_on"},
+        {"action": "homeassistant.turn_on", "entity_id": "light.kitchen"},
+        {"action": "light.turn_on", "entity_id": "all"},
+        {
+            "action": "homeassistant.turn_on",
+            "entity_id": ["light.kitchen", "light.ceiling"],
+        },
+        {
+            "action": "light.turn_on",
+            "entity_id": "all",
+            "alias": "turn on kitchen lights",
+        },
+        {"action": "scene.turn_on", "metadata": {}},
+    ],
+)
+def test_service_schema(hass: HomeAssistant, config: dict[str, Any]) -> None:
+    """Test service_schema validation."""
+    validated = cv.SERVICE_SCHEMA(config)
 
-    # Check metadata is removed from the validated output
-    assert cv.SERVICE_SCHEMA({"service": "scene.turn_on", "metadata": {}}) == {
-        "service": "scene.turn_on"
-    }
+    # Ensure metadata is removed from the validated output
+    assert "metadata" not in validated
+
+    # Ensure service is migrated to action
+    assert "service" not in validated
+    assert "action" in validated
+    assert validated["action"] == config.get("service", config["action"])
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        None,
+        {"data": {"entity_id": "light.kitchen"}},
+        {
+            "service": "homeassistant.turn_on",
+            "service_template": "homeassistant.turn_on",
+        },
+        {"service": "homeassistant.turn_on", "data": None},
+        {
+            "service": "homeassistant.turn_on",
+            "data_template": {"brightness": "{{ no_end"},
+        },
+        {
+            "service": "homeassistant.turn_on",
+            "action": "homeassistant.turn_on",
+        },
+        {
+            "action": "homeassistant.turn_on",
+            "service_template": "homeassistant.turn_on",
+        },
+        {"action": "homeassistant.turn_on", "data": None},
+        {
+            "action": "homeassistant.turn_on",
+            "data_template": {"brightness": "{{ no_end"},
+        },
+    ],
+)
+def test_invalid_service_schema(
+    hass: HomeAssistant, config: dict[str, Any] | None
+) -> None:
+    """Test service_schema validation fails."""
+    with pytest.raises(probatio.MultipleInvalid):
+        cv.SERVICE_SCHEMA(config)
 
 
 def test_entity_service_schema() -> None:
     """Test make_entity_service_schema validation."""
     schema = cv.make_entity_service_schema(
-        {vol.Required("required"): cv.positive_int, vol.Optional("optional"): cv.string}
+        {
+            probatio.Required("required"): cv.positive_int,
+            probatio.Optional("optional"): cv.string,
+        }
     )
 
     options = (
@@ -443,7 +526,7 @@ def test_entity_service_schema() -> None:
         {"required": "str", "area_id": "kitchen"},
     )
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             cv.SERVICE_SCHEMA(value)
 
     options = (
@@ -468,11 +551,13 @@ def test_entity_service_schema() -> None:
 
 def test_entity_service_schema_with_metadata() -> None:
     """Test make_entity_service_schema with overridden metadata key."""
-    schema = cv.make_entity_service_schema({vol.Required("metadata"): cv.positive_int})
+    schema = cv.make_entity_service_schema(
+        {probatio.Required("metadata"): cv.positive_int}
+    )
 
     options = ({"metadata": {"some": "frontend_stuff"}, "entity_id": "light.kitchen"},)
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             cv.SERVICE_SCHEMA(value)
 
     options = ({"metadata": 1, "entity_id": "light.kitchen"},)
@@ -483,10 +568,10 @@ def test_entity_service_schema_with_metadata() -> None:
 
 def test_slug() -> None:
     """Test slug validation."""
-    schema = vol.Schema(cv.slug)
+    schema = probatio.Schema(cv.slug)
 
     for value in (None, "hello world"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in (12345, "hello"):
@@ -495,19 +580,26 @@ def test_slug() -> None:
 
 def test_string(hass: HomeAssistant) -> None:
     """Test string validation."""
-    schema = vol.Schema(cv.string)
+    schema = probatio.Schema(cv.string)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema(None)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema([])
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema({})
 
     for value in (True, 1, "hello"):
         schema(value)
+
+    # Test subclasses of str are returned
+    class MyString(str):
+        __slots__ = ()
+
+    my_string = MyString("hello")
+    assert schema(my_string) is my_string
 
     # Test template support
     for text, native in (
@@ -525,13 +617,16 @@ def test_string(hass: HomeAssistant) -> None:
 
 def test_string_with_no_html() -> None:
     """Test string with no html validation."""
-    schema = vol.Schema(cv.string_with_no_html)
+    schema = probatio.Schema(cv.string_with_no_html)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema("This has HTML in it <a>Link</a>")
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema("<b>Bold</b>")
+
+    with pytest.raises(probatio.Invalid):
+        schema("HTML element names are <EM>case-insensitive</eM>.")
 
     for value in (
         True,
@@ -545,9 +640,9 @@ def test_string_with_no_html() -> None:
 
 def test_temperature_unit() -> None:
     """Test temperature unit validation."""
-    schema = vol.Schema(cv.temperature_unit)
+    schema = probatio.Schema(cv.temperature_unit)
 
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema("K")
 
     schema("C")
@@ -556,10 +651,12 @@ def test_temperature_unit() -> None:
 
 def test_x10_address() -> None:
     """Test x10 addr validator."""
-    schema = vol.Schema(cv.x10_address)
-    with pytest.raises(vol.Invalid):
+    schema = probatio.Schema(cv.x10_address)
+    with pytest.raises(probatio.Invalid):
         schema("Q1")
+    with pytest.raises(probatio.Invalid):
         schema("q55")
+    with pytest.raises(probatio.Invalid):
         schema("garbage_addr")
 
     schema("a1")
@@ -568,7 +665,7 @@ def test_x10_address() -> None:
 
 def test_template(hass: HomeAssistant) -> None:
     """Test template validator."""
-    schema = vol.Schema(cv.template)
+    schema = probatio.Schema(cv.template)
 
     for value in (
         None,
@@ -576,7 +673,7 @@ def test_template(hass: HomeAssistant) -> None:
         "{% if True %}Hello",
         ["test"],
     ):
-        with pytest.raises(vol.Invalid):
+        with pytest.raises(probatio.Invalid):
             schema(value)
 
     options = (
@@ -584,10 +681,12 @@ def test_template(hass: HomeAssistant) -> None:
         "Hello",
         "{{ beer }}",
         "{% if 1 == 1 %}Hello{% else %}World{% endif %}",
-        # Function added as an extension by Home Assistant
+        # Function 'expand' added as an extension by Home Assistant
         "{{ expand('group.foo')|map(attribute='entity_id')|list }}",
-        # Filter added as an extension by Home Assistant
+        # Filter 'expand' added as an extension by Home Assistant
         "{{ ['group.foo']|expand|map(attribute='entity_id')|list }}",
+        # Non existing function 'no_such_function' is not detected by Jinja2
+        "{{ no_such_function('group.foo')|map(attribute='entity_id')|list }}",
     )
     for value in options:
         schema(value)
@@ -595,7 +694,7 @@ def test_template(hass: HomeAssistant) -> None:
 
 async def test_template_no_hass(hass: HomeAssistant) -> None:
     """Test template validator."""
-    schema = vol.Schema(cv.template)
+    schema = probatio.Schema(cv.template)
 
     for value in (
         None,
@@ -605,7 +704,7 @@ async def test_template_no_hass(hass: HomeAssistant) -> None:
         # Filter added as an extension by Home Assistant
         "{{ ['group.foo']|expand|map(attribute='entity_id')|list }}",
     ):
-        with pytest.raises(vol.Invalid):
+        with pytest.raises(probatio.Invalid):
             await hass.async_add_executor_job(schema, value)
 
     options = (
@@ -613,16 +712,22 @@ async def test_template_no_hass(hass: HomeAssistant) -> None:
         "Hello",
         "{{ beer }}",
         "{% if 1 == 1 %}Hello{% else %}World{% endif %}",
-        # Function added as an extension by Home Assistant
+        # Function 'expand' added as an extension by Home Assistant, no error
+        # because non existing functions are not detected by Jinja2
         "{{ expand('group.foo')|map(attribute='entity_id')|list }}",
+        # Non existing function 'no_such_function' is not detected by Jinja2
+        "{{ no_such_function('group.foo')|map(attribute='entity_id')|list }}",
     )
     for value in options:
-        await hass.async_add_executor_job(schema, value)
+        with pytest.raises(
+            probatio.Invalid, match="Validates schema outside the event loop"
+        ):
+            await hass.async_add_executor_job(schema, value)
 
 
 def test_dynamic_template(hass: HomeAssistant) -> None:
     """Test dynamic template validator."""
-    schema = vol.Schema(cv.dynamic_template)
+    schema = probatio.Schema(cv.dynamic_template)
 
     for value in (
         None,
@@ -632,54 +737,30 @@ def test_dynamic_template(hass: HomeAssistant) -> None:
         ["test"],
         "just a string",
     ):
-        with pytest.raises(vol.Invalid):
+        with pytest.raises(probatio.Invalid):
             schema(value)
 
     options = (
         "{{ beer }}",
         "{% if 1 == 1 %}Hello{% else %}World{% endif %}",
-        # Function added as an extension by Home Assistant
+        # Function 'expand' added as an extension by Home Assistant
         "{{ expand('group.foo')|map(attribute='entity_id')|list }}",
-        # Filter added as an extension by Home Assistant
+        # Filter 'expand' added as an extension by Home Assistant
         "{{ ['group.foo']|expand|map(attribute='entity_id')|list }}",
+        # Non existing function 'no_such_function' is not detected by Jinja2
+        "{{ no_such_function('group.foo')|map(attribute='entity_id')|list }}",
     )
     for value in options:
         schema(value)
 
 
-async def test_dynamic_template_no_hass(hass: HomeAssistant) -> None:
-    """Test dynamic template validator."""
-    schema = vol.Schema(cv.dynamic_template)
-
-    for value in (
-        None,
-        1,
-        "{{ partial_print }",
-        "{% if True %}Hello",
-        ["test"],
-        "just a string",
-        # Filter added as an extension by Home Assistant
-        "{{ ['group.foo']|expand|map(attribute='entity_id')|list }}",
-    ):
-        with pytest.raises(vol.Invalid):
-            await hass.async_add_executor_job(schema, value)
-
-    options = (
-        "{{ beer }}",
-        "{% if 1 == 1 %}Hello{% else %}World{% endif %}",
-        # Function added as an extension by Home Assistant
-        "{{ expand('group.foo')|map(attribute='entity_id')|list }}",
-    )
-    for value in options:
-        await hass.async_add_executor_job(schema, value)
-
-
+@pytest.mark.usefixtures("hass")
 def test_template_complex() -> None:
     """Test template_complex validator."""
-    schema = vol.Schema(cv.template_complex)
+    schema = probatio.Schema(cv.template_complex)
 
     for value in ("{{ partial_print }", "{% if True %}Hello"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     options = (
@@ -710,9 +791,9 @@ def test_template_complex() -> None:
 
 def test_time_zone() -> None:
     """Test time zone validation."""
-    schema = vol.Schema(cv.time_zone)
+    schema = probatio.Schema(cv.time_zone)
 
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema("America/Do_Not_Exist")
 
     schema("America/Los_Angeles")
@@ -721,37 +802,37 @@ def test_time_zone() -> None:
 
 def test_date() -> None:
     """Test date validation."""
-    schema = vol.Schema(cv.date)
+    schema = probatio.Schema(cv.date)
 
-    for value in ["Not a date", "23:42", "2016-11-23T18:59:08"]:
-        with pytest.raises(vol.Invalid):
+    for value in ("Not a date", "23:42", "2016-11-23T18:59:08"):
+        with pytest.raises(probatio.Invalid):
             schema(value)
 
-    schema(datetime.now().date())
+    schema(dt_util.now().date())
     schema("2016-11-23")
 
 
 def test_time() -> None:
     """Test date validation."""
-    schema = vol.Schema(cv.time)
+    schema = probatio.Schema(cv.time)
 
-    for value in ["Not a time", "2016-11-23", "2016-11-23T18:59:08"]:
-        with pytest.raises(vol.Invalid):
+    for value in ("Not a time", "2016-11-23", "2016-11-23T18:59:08"):
+        with pytest.raises(probatio.Invalid):
             schema(value)
 
-    schema(datetime.now().time())
+    schema(dt_util.now().time())
     schema("23:42:00")
     schema("23:42")
 
 
 def test_datetime() -> None:
     """Test date time validation."""
-    schema = vol.Schema(cv.datetime)
-    for value in [date.today(), "Wrong DateTime"]:
-        with pytest.raises(vol.MultipleInvalid):
+    schema = probatio.Schema(cv.datetime)
+    for value in (date.today(), "Wrong DateTime"):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
-    schema(datetime.now())
+    schema(dt_util.now())
     schema("2016-11-23T18:59:08")
 
 
@@ -762,10 +843,11 @@ def test_multi_select() -> None:
         - Will not accept any input but a list
         - Will not accept selections outside of configured scope
     """
-    schema = vol.Schema(cv.multi_select({"paulus": "Paulus", "robban": "Robban"}))
+    schema = probatio.Schema(cv.multi_select({"paulus": "Paulus", "robban": "Robban"}))
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema("robban")
+    with pytest.raises(probatio.Invalid):
         schema(["paulus", "martinhj"])
 
     schema(["robban", "paulus"])
@@ -799,6 +881,7 @@ def test_selector_in_serializer() -> None:
         "selector": {
             "text": {
                 "multiline": False,
+                "multiple": False,
             }
         }
     }
@@ -814,11 +897,13 @@ def test_positive_time_period_dict_in_serializer() -> None:
 @pytest.fixture
 def schema():
     """Create a schema used for testing deprecation."""
-    return vol.Schema({"venus": cv.boolean, "mars": cv.boolean, "jupiter": cv.boolean})
+    return probatio.Schema(
+        {"venus": cv.boolean, "mars": cv.boolean, "jupiter": cv.boolean}
+    )
 
 
 @pytest.fixture
-def version(monkeypatch):
+def version(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch the version used for testing to 0.5.0."""
     monkeypatch.setattr(homeassistant.const, "__version__", "0.5.0")
 
@@ -831,7 +916,7 @@ def test_deprecated_with_no_optionals(caplog: pytest.LogCaptureFixture, schema) 
         - Processes schema without changing any values
         - No warning or difference in output if key is not provided
     """
-    deprecated_schema = vol.All(cv.deprecated("mars"), schema)
+    deprecated_schema = probatio.All(cv.deprecated("mars"), schema)
 
     test_data = {"mars": True}
     output = deprecated_schema(test_data.copy())
@@ -857,15 +942,16 @@ def test_deprecated_with_no_optionals(caplog: pytest.LogCaptureFixture, schema) 
 def test_deprecated_or_removed_param_and_raise(
     caplog: pytest.LogCaptureFixture, schema
 ) -> None:
-    """Test removed or deprecation options and fail the config validation by raising an exception.
+    """Test removed or deprecation options and fail config validation.
 
     Expected behavior:
-        - Outputs the appropriate deprecation or removed from support error if key is detected
+        - Outputs the appropriate deprecation or removed
+          from support error if key is detected
     """
-    removed_schema = vol.All(cv.deprecated("mars", raise_if_present=True), schema)
+    removed_schema = probatio.All(cv.deprecated("mars", raise_if_present=True), schema)
 
     test_data = {"mars": True}
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         removed_schema(test_data)
     assert (
         "The 'mars' option is deprecated, please remove it from your configuration"
@@ -878,10 +964,10 @@ def test_deprecated_or_removed_param_and_raise(
     assert len(caplog.records) == 0
     assert test_data == output
 
-    deprecated_schema = vol.All(cv.removed("mars"), schema)
+    deprecated_schema = probatio.All(cv.removed("mars"), schema)
 
     test_data = {"mars": True}
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         deprecated_schema(test_data)
     assert (
         "The 'mars' option has been removed, please remove it from your configuration"
@@ -908,7 +994,7 @@ def test_deprecated_with_replacement_key(
         - No warning or difference in output if neither key nor
             replacement_key are provided
     """
-    deprecated_schema = vol.All(
+    deprecated_schema = probatio.All(
         cv.deprecated("mars", replacement_key="jupiter"), schema
     )
 
@@ -918,7 +1004,7 @@ def test_deprecated_with_replacement_key(
     assert (
         "The 'mars' option is deprecated, please replace it with 'jupiter'"
     ) in caplog.text
-    assert {"jupiter": True} == output
+    assert output == {"jupiter": True}
 
     caplog.clear()
     assert len(caplog.records) == 0
@@ -942,10 +1028,14 @@ def test_deprecated_with_default(caplog: pytest.LogCaptureFixture, schema) -> No
     Expected behavior:
         - Behaves identically as when the default value was not present
     """
-    deprecated_schema = vol.All(cv.deprecated("mars", default=False), schema)
+    deprecated_schema = probatio.All(cv.deprecated("mars", default=False), schema)
 
     test_data = {"mars": True}
-    output = deprecated_schema(test_data.copy())
+    with patch(
+        "homeassistant.helpers.config_validation.get_integration_logger",
+        return_value=logging.getLogger(__name__),
+    ):
+        output = deprecated_schema(test_data.copy())
     assert len(caplog.records) == 1
     assert caplog.records[0].name == __name__
     assert (
@@ -975,7 +1065,7 @@ def test_deprecated_with_replacement_key_and_default(
         - No warning if neither key nor replacement_key are provided
             - Adds replacement_key with default value in this case
     """
-    deprecated_schema = vol.All(
+    deprecated_schema = probatio.All(
         cv.deprecated("mars", replacement_key="jupiter", default=False), schema
     )
 
@@ -985,7 +1075,7 @@ def test_deprecated_with_replacement_key_and_default(
     assert (
         "The 'mars' option is deprecated, please replace it with 'jupiter'"
     ) in caplog.text
-    assert {"jupiter": True} == output
+    assert output == {"jupiter": True}
 
     caplog.clear()
     assert len(caplog.records) == 0
@@ -998,14 +1088,14 @@ def test_deprecated_with_replacement_key_and_default(
     test_data = {"venus": True}
     output = deprecated_schema(test_data.copy())
     assert len(caplog.records) == 0
-    assert {"venus": True, "jupiter": False} == output
+    assert output == {"venus": True, "jupiter": False}
 
-    deprecated_schema_with_default = vol.All(
-        vol.Schema(
+    deprecated_schema_with_default = probatio.All(
+        probatio.Schema(
             {
                 "venus": cv.boolean,
-                vol.Optional("mars", default=False): cv.boolean,
-                vol.Optional("jupiter", default=False): cv.boolean,
+                probatio.Optional("mars", default=False): cv.boolean,
+                probatio.Optional("jupiter", default=False): cv.boolean,
             }
         ),
         cv.deprecated("mars", replacement_key="jupiter", default=False),
@@ -1017,41 +1107,42 @@ def test_deprecated_with_replacement_key_and_default(
     assert (
         "The 'mars' option is deprecated, please replace it with 'jupiter'"
     ) in caplog.text
-    assert {"jupiter": True} == output
+    assert output == {"jupiter": True}
 
 
 def test_deprecated_cant_find_module() -> None:
-    """Test if the current module cannot be inspected."""
-    with patch("inspect.getmodule", return_value=None):
-        # This used to raise.
-        cv.deprecated(
-            "mars",
-            replacement_key="jupiter",
-            default=False,
-        )
+    """Test if the current module cannot be found."""
+    # This used to raise.
+    cv.deprecated(
+        "mars",
+        replacement_key="jupiter",
+        default=False,
+    )
 
-    with patch("inspect.getmodule", return_value=None):
-        # This used to raise.
-        cv.removed(
-            "mars",
-            default=False,
-        )
+    # This used to raise.
+    cv.removed(
+        "mars",
+        default=False,
+    )
 
 
 def test_deprecated_or_removed_logger_with_config_attributes(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test if the logger outputs the correct message if the line and file attribute is available in config."""
+    """Test logger outputs correct message if line and file attr is available."""
     file: str = "configuration.yaml"
     line: int = 54
 
     # test as deprecated option
     replacement_key = "jupiter"
     option_status = "is deprecated"
-    replacement = f"'mars' option near {file}:{line} {option_status}, please replace it with '{replacement_key}'"
+    replacement = (
+        f"'mars' option near {file}:{line} {option_status},"
+        f" please replace it with '{replacement_key}'"
+    )
     config = OrderedDict([("mars", "blah")])
-    setattr(config, "__config_file__", file)
-    setattr(config, "__line__", line)
+    config.__config_file__ = file
+    config.__line__ = line
 
     validated = cv.deprecated("mars", replacement_key=replacement_key, default=False)(
         config
@@ -1066,10 +1157,13 @@ def test_deprecated_or_removed_logger_with_config_attributes(
 
     # test as removed option
     option_status = "has been removed"
-    replacement = f"'mars' option near {file}:{line} {option_status}, please remove it from your configuration"
+    replacement = (
+        f"'mars' option near {file}:{line} {option_status},"
+        " please remove it from your configuration"
+    )
     config = OrderedDict([("mars", "blah")])
-    setattr(config, "__config_file__", file)
-    setattr(config, "__line__", line)
+    config.__config_file__ = file
+    config.__line__ = line
 
     validated = cv.removed("mars", default=False, raise_if_present=False)(config)
     assert "mars" not in validated  # Removed because by cv.removed
@@ -1084,12 +1178,12 @@ def test_deprecated_or_removed_logger_with_config_attributes(
 def test_deprecated_logger_with_one_config_attribute(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test if the logger outputs the correct message if only one of line and file attribute is available in config."""
+    """Test logger message when only one of line/file attr is available."""
     file: str = "configuration.yaml"
     line: int = 54
     replacement = f"'mars' option near {file}:{line} is deprecated"
     config = OrderedDict([("mars", "blah")])
-    setattr(config, "__config_file__", file)
+    config.__config_file__ = file
 
     cv.deprecated("mars", replacement_key="jupiter", default=False)(config)
 
@@ -1103,7 +1197,7 @@ def test_deprecated_logger_with_one_config_attribute(
     assert len(caplog.records) == 0
 
     config = OrderedDict([("mars", "blah")])
-    setattr(config, "__line__", line)
+    config.__line__ = line
 
     cv.deprecated("mars", replacement_key="jupiter", default=False)(config)
 
@@ -1120,7 +1214,7 @@ def test_deprecated_logger_with_one_config_attribute(
 def test_deprecated_logger_without_config_attributes(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test if the logger outputs the correct message if the line and file attribute is not available in config."""
+    """Test logger message when line and file attr is not available."""
     file: str = "configuration.yaml"
     line: int = 54
     replacement = f"'mars' option near {file}:{line} is deprecated"
@@ -1140,11 +1234,11 @@ def test_deprecated_logger_without_config_attributes(
 
 def test_key_dependency() -> None:
     """Test key_dependency validator."""
-    schema = vol.Schema(cv.key_dependency("beer", "soda"))
+    schema = probatio.Schema(cv.key_dependency("beer", "soda"))
 
     options = {"beer": None}
     for value in options:
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     options = ({"beer": None, "soda": None}, {"soda": None}, {})
@@ -1154,25 +1248,30 @@ def test_key_dependency() -> None:
 
 def test_has_at_most_one_key() -> None:
     """Test has_at_most_one_key validator."""
-    schema = vol.Schema(cv.has_at_most_one_key("beer", "soda"))
+    schema = probatio.Schema(cv.has_at_most_one_key("beer", "soda"))
 
     for value in (None, [], {"beer": None, "soda": None}):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
-    for value in ({}, {"beer": None}, {"soda": None}, {vol.Optional("soda"): None}):
+    for value in (
+        {},
+        {"beer": None},
+        {"soda": None},
+        {probatio.Optional("soda"): None},
+    ):
         schema(value)
 
 
 def test_has_at_least_one_key() -> None:
     """Test has_at_least_one_key validator."""
-    schema = vol.Schema(cv.has_at_least_one_key("beer", "soda"))
+    schema = probatio.Schema(cv.has_at_least_one_key("beer", "soda"))
 
     for value in (None, [], {}, {"wine": None}):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
-    for value in ({"beer": None}, {"soda": None}, {vol.Required("soda"): None}):
+    for value in ({"beer": None}, {"soda": None}, {probatio.Required("soda"): None}):
         schema(value)
 
 
@@ -1185,20 +1284,20 @@ def test_enum() -> None:
         value1 = "Value 1"
         value2 = "Value 2"
 
-    schema = vol.Schema(cv.enum(TestEnum))
+    schema = probatio.Schema(cv.enum(TestEnum))
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema("value3")
 
 
-def test_socket_timeout():  # pylint: disable=invalid-name
+def test_socket_timeout() -> None:
     """Test socket timeout validator."""
-    schema = vol.Schema(cv.socket_timeout)
+    schema = probatio.Schema(cv.socket_timeout)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema(0.0)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema(-1)
 
     assert schema(None) == _GLOBAL_DEFAULT_TIMEOUT
@@ -1208,12 +1307,12 @@ def test_socket_timeout():  # pylint: disable=invalid-name
 
 def test_matches_regex() -> None:
     """Test matches_regex validator."""
-    schema = vol.Schema(cv.matches_regex(".*uiae.*"))
+    schema = probatio.Schema(cv.matches_regex(".*uiae.*"))
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema(1.0)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema("  nrtd   ")
 
     test_str = "This is a test including uiae."
@@ -1222,12 +1321,12 @@ def test_matches_regex() -> None:
 
 def test_is_regex() -> None:
     """Test the is_regex validator."""
-    schema = vol.Schema(cv.is_regex)
+    schema = probatio.Schema(cv.is_regex)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema("(")
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         schema({"a dict": "is not a regex"})
 
     valid_re = ".*"
@@ -1236,7 +1335,7 @@ def test_is_regex() -> None:
 
 def test_comp_entity_ids() -> None:
     """Test config validation for component entity IDs."""
-    schema = vol.Schema(cv.comp_entity_ids)
+    schema = probatio.Schema(cv.comp_entity_ids)
 
     for valid in (
         "ALL",
@@ -1250,23 +1349,23 @@ def test_comp_entity_ids() -> None:
         schema(valid)
 
     for invalid in (["light.kitchen", "not-entity-id"], "*", ""):
-        with pytest.raises(vol.Invalid):
+        with pytest.raises(probatio.Invalid):
             schema(invalid)
 
 
 def test_uuid4_hex(caplog: pytest.LogCaptureFixture) -> None:
     """Test uuid validation."""
-    schema = vol.Schema(cv.uuid4_hex)
+    schema = probatio.Schema(cv.uuid4_hex)
 
-    for value in ["Not a hex string", "0", 0]:
-        with pytest.raises(vol.Invalid):
+    for value in ("Not a hex string", "0", 0):
+        with pytest.raises(probatio.Invalid):
             schema(value)
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         # the 13th char should be 4
         schema("a03d31b22eee1acc9b90eec40be6ed23")
 
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         # the 17th char should be 8-a
         schema("a03d31b22eee4acc7b90eec40be6ed23")
 
@@ -1277,126 +1376,191 @@ def test_uuid4_hex(caplog: pytest.LogCaptureFixture) -> None:
 
 def test_key_value_schemas() -> None:
     """Test key value schemas."""
-    schema = vol.Schema(
+    schema = probatio.Schema(
         cv.key_value_schemas(
             "mode",
             {
-                "number": vol.Schema({"mode": "number", "data": int}),
-                "string": vol.Schema({"mode": "string", "data": str}),
+                "number": probatio.Schema({"mode": "number", "data": int}),
+                "string": probatio.Schema({"mode": "string", "data": str}),
             },
         )
     )
 
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         schema(True)
-        assert str(excinfo.value) == "Expected a dictionary"
+    assert str(excinfo.value) == "Expected a dictionary"
 
     for mode in None, {"a": "dict"}, "invalid":
-        with pytest.raises(vol.Invalid) as excinfo:
+        with pytest.raises(probatio.Invalid) as excinfo:
             schema({"mode": mode})
         assert (
             str(excinfo.value)
             == f"Unexpected value for mode: '{mode}'. Expected number, string"
         )
 
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         schema({"mode": "number", "data": "string-value"})
-    assert str(excinfo.value) == "expected int for dictionary value @ data['data']"
+    assert str(excinfo.value) == "expected int at 'data'"
 
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         schema({"mode": "string", "data": 1})
-    assert str(excinfo.value) == "expected str for dictionary value @ data['data']"
+    assert str(excinfo.value) == "expected str at 'data'"
 
     for mode, data in (("number", 1), ("string", "hello")):
         schema({"mode": mode, "data": data})
 
 
+@pytest.mark.usefixtures("hass")
 def test_key_value_schemas_with_default() -> None:
     """Test key value schemas."""
-    schema = vol.Schema(
+    schema = probatio.Schema(
         cv.key_value_schemas(
             "mode",
             {
-                "number": vol.Schema({"mode": "number", "data": int}),
-                "string": vol.Schema({"mode": "string", "data": str}),
+                "number": probatio.Schema({"mode": "number", "data": int}),
+                "string": probatio.Schema({"mode": "string", "data": str}),
             },
-            vol.Schema({"mode": cv.dynamic_template}),
+            probatio.Schema({"mode": cv.dynamic_template}),
             "a cool template",
         )
     )
 
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         schema(True)
-        assert str(excinfo.value) == "Expected a dictionary"
+    assert str(excinfo.value) == "Expected a dictionary"
 
     for mode in None, {"a": "dict"}, "invalid":
-        with pytest.raises(vol.Invalid) as excinfo:
+        with pytest.raises(probatio.Invalid) as excinfo:
             schema({"mode": mode})
         assert (
-            str(excinfo.value)
-            == f"Unexpected value for mode: '{mode}'. Expected number, string, a cool template"
+            str(excinfo.value) == f"Unexpected value for mode: '{mode}'."
+            " Expected number, string, a cool template"
         )
 
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         schema({"mode": "number", "data": "string-value"})
-    assert str(excinfo.value) == "expected int for dictionary value @ data['data']"
+    assert str(excinfo.value) == "expected int at 'data'"
 
-    with pytest.raises(vol.Invalid) as excinfo:
+    with pytest.raises(probatio.Invalid) as excinfo:
         schema({"mode": "string", "data": 1})
-    assert str(excinfo.value) == "expected str for dictionary value @ data['data']"
+    assert str(excinfo.value) == "expected str at 'data'"
 
     for mode, data in (("number", 1), ("string", "hello")):
         schema({"mode": mode, "data": data})
     schema({"mode": "{{ 1 + 1}}"})
 
 
-def test_script(caplog: pytest.LogCaptureFixture) -> None:
-    """Test script validation is user friendly."""
-    for data, msg in (
+@pytest.mark.usefixtures("hass")
+def test_key_value_schemas_with_default_no_list_alternatives() -> None:
+    """Test key value schemas."""
+    schema = probatio.Schema(
+        cv.key_value_schemas(
+            "mode",
+            {
+                "number": probatio.Schema({"mode": "number", "data": int}),
+                "string": probatio.Schema({"mode": "string", "data": str}),
+            },
+            probatio.Schema({"mode": cv.dynamic_template}),
+            "a cool template",
+            list_alternatives=False,
+        )
+    )
+
+    with pytest.raises(probatio.Invalid) as excinfo:
+        schema(True)
+    assert str(excinfo.value) == "Expected a dictionary"
+
+    for mode in None, {"a": "dict"}, "invalid":
+        with pytest.raises(probatio.Invalid) as excinfo:
+            schema({"mode": mode})
+        assert (
+            str(excinfo.value)
+            == f"Unexpected value for mode: '{mode}'. Expected a cool template"
+        )
+
+
+@pytest.mark.usefixtures("hass")
+def test_key_value_schemas_without_default_no_list_alternatives() -> None:
+    """Test key value schemas."""
+    with pytest.raises(ValueError) as excinfo:
+        probatio.Schema(
+            cv.key_value_schemas(
+                "mode",
+                {
+                    "number": probatio.Schema({"mode": "number", "data": int}),
+                    "string": probatio.Schema({"mode": "string", "data": str}),
+                },
+                probatio.Schema({"mode": cv.dynamic_template}),
+                list_alternatives=False,
+            )
+        )
+    assert (
+        str(excinfo.value)
+        == "default_description must be provided if list_alternatives is False"
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "error"),
+    [
         ({"delay": "{{ invalid"}, "should be format 'HH:MM'"),
         ({"wait_template": "{{ invalid"}, "invalid template"),
-        ({"condition": "invalid"}, "Unexpected value for condition: 'invalid'"),
-        (
-            {"condition": "not", "conditions": {"condition": "invalid"}},
-            "Unexpected value for condition: 'invalid'",
-        ),
         # The validation error message could be improved to explain that this is not
         # a valid shorthand template
+        (
+            {"condition": 123},
+            "Unexpected value for condition: '123'. Expected a condition, a list of "
+            "conditions or a valid template",
+        ),
         (
             {"condition": "not", "conditions": "not a dynamic template"},
             "Expected a dictionary",
         ),
-        ({"event": None}, "string value is None for dictionary value @ data['event']"),
+        (
+            {"event": None},
+            r"string value is None at 'event'",
+        ),
         (
             {"device_id": None},
-            "string value is None for dictionary value @ data['device_id']",
+            r"string value is None at 'device_id'",
         ),
         (
             {"scene": "light.kitchen"},
             "Entity ID 'light.kitchen' does not belong to domain 'scene'",
         ),
-    ):
-        with pytest.raises(vol.Invalid) as excinfo:
-            cv.script_action(data)
-
-        assert msg in str(excinfo.value)
+        (
+            {
+                "alias": "stop step",
+                "stop": "In the name of love",
+                "error": True,
+                "response_variable": "response-value",
+            },
+            "not allowed to add a response to an error stop action",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("hass")
+def test_script(caplog: pytest.LogCaptureFixture, config: dict, error: str) -> None:
+    """Test script action validation is user friendly."""
+    with pytest.raises(probatio.Invalid, match=error):
+        cv.script_action(config)
 
 
 def test_whitespace() -> None:
     """Test whitespace validation."""
-    schema = vol.Schema(cv.whitespace)
+    schema = probatio.Schema(cv.whitespace)
 
     for value in (
         None,
-        "" "T",
+        "T",
         "negative",
         "lock",
-        "tr  ue",
+        "tr  ue",  # codespell:ignore ue
         [],
         [1, 2],
         {"one": "two"},
     ):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("  ", "   "):
@@ -1405,13 +1569,13 @@ def test_whitespace() -> None:
 
 def test_currency() -> None:
     """Test currency validator."""
-    schema = vol.Schema(cv.currency)
+    schema = probatio.Schema(cv.currency)
 
     for value in (
         None,
         "BTC",
     ):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("EUR", "USD"):
@@ -1420,10 +1584,10 @@ def test_currency() -> None:
 
 def test_historic_currency() -> None:
     """Test historic currency validator."""
-    schema = vol.Schema(cv.historic_currency)
+    schema = probatio.Schema(cv.historic_currency)
 
     for value in (None, "BTC", "EUR"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("DEM", "NLG"):
@@ -1432,10 +1596,10 @@ def test_historic_currency() -> None:
 
 def test_country() -> None:
     """Test country validator."""
-    schema = vol.Schema(cv.country)
+    schema = probatio.Schema(cv.country)
 
     for value in (None, "Candyland", "USA"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("NL", "SE"):
@@ -1444,27 +1608,28 @@ def test_country() -> None:
 
 def test_language() -> None:
     """Test language validator."""
-    schema = vol.Schema(cv.language)
+    schema = probatio.Schema(cv.language)
 
     for value in (None, "Klingon", "english"):
-        with pytest.raises(vol.MultipleInvalid):
+        with pytest.raises(probatio.MultipleInvalid):
             schema(value)
 
     for value in ("en", "sv"):
         assert schema(value)
 
 
+@pytest.mark.usefixtures("hass")
 def test_positive_time_period_template() -> None:
     """Test positive time period template validation."""
-    schema = vol.Schema(cv.positive_time_period_template)
+    schema = probatio.Schema(cv.positive_time_period_template)
 
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema({})
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema({5: 5})
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema({"invalid": 5})
-    with pytest.raises(vol.MultipleInvalid):
+    with pytest.raises(probatio.MultipleInvalid):
         schema("invalid")
 
     # Time periods pass
@@ -1497,12 +1662,13 @@ def test_empty_schema(caplog: pytest.LogCaptureFixture) -> None:
 
 def test_empty_schema_cant_find_module() -> None:
     """Test if the current module cannot be inspected."""
-    with patch("inspect.getmodule", return_value=None):
-        cv.empty_config_schema("test_domain")({"test_domain": {"foo": "bar"}})
+    cv.empty_config_schema("test_domain")({"test_domain": {"foo": "bar"}})
 
 
 def test_config_entry_only_schema(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    issue_registry: ir.IssueRegistry,
 ) -> None:
     """Test config_entry_only_config_schema."""
     expected_issue = "config_entry_only_test_domain"
@@ -1510,7 +1676,6 @@ def test_config_entry_only_schema(
         "The test_domain integration does not support YAML setup, please remove "
         "it from your configuration"
     )
-    issue_registry = ir.async_get(hass)
 
     cv.config_entry_only_config_schema("test_domain")({})
     assert expected_message not in caplog.text
@@ -1528,19 +1693,18 @@ def test_config_entry_only_schema(
 
 def test_config_entry_only_schema_cant_find_module() -> None:
     """Test if the current module cannot be inspected."""
-    with patch("inspect.getmodule", return_value=None):
-        cv.config_entry_only_config_schema("test_domain")(
-            {"test_domain": {"foo": "bar"}}
-        )
+    cv.config_entry_only_config_schema("test_domain")({"test_domain": {"foo": "bar"}})
 
 
 def test_config_entry_only_schema_no_hass(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    issue_registry: ir.IssueRegistry,
 ) -> None:
-    """Test if the the hass context var is not set in our context."""
+    """Test if the hass context is not set in our context."""
     with patch(
         "homeassistant.helpers.config_validation.async_get_hass",
-        side_effect=LookupError,
+        side_effect=HomeAssistantError,
     ):
         cv.config_entry_only_config_schema("test_domain")(
             {"test_domain": {"foo": "bar"}}
@@ -1550,12 +1714,13 @@ def test_config_entry_only_schema_no_hass(
         "it from your configuration"
     )
     assert expected_message in caplog.text
-    issue_registry = ir.async_get(hass)
     assert not issue_registry.issues
 
 
 def test_platform_only_schema(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    issue_registry: ir.IssueRegistry,
 ) -> None:
     """Test config_entry_only_config_schema."""
     expected_issue = "platform_only_test_domain"
@@ -1563,8 +1728,6 @@ def test_platform_only_schema(
         "The test_domain integration does not support YAML setup, please remove "
         "it from your configuration"
     )
-    issue_registry = ir.async_get(hass)
-
     cv.platform_only_config_schema("test_domain")({})
     assert expected_message not in caplog.text
     assert not issue_registry.async_get_issue(HOMEASSISTANT_DOMAIN, expected_issue)
@@ -1577,3 +1740,396 @@ def test_platform_only_schema(
     cv.platform_only_config_schema("test_domain")({"test_domain": {"foo": "bar"}})
     assert expected_message in caplog.text
     assert issue_registry.async_get_issue(HOMEASSISTANT_DOMAIN, expected_issue)
+
+
+def test_domain() -> None:
+    """Test domain."""
+    with pytest.raises(probatio.Invalid):
+        cv.domain_key(5)
+    with pytest.raises(probatio.Invalid):
+        cv.domain_key("")
+    with pytest.raises(probatio.Invalid):
+        cv.domain_key("hue ")
+    with pytest.raises(probatio.Invalid):
+        cv.domain_key("hue  ")
+    assert cv.domain_key("hue") == "hue"
+    assert cv.domain_key("hue1") == "hue1"
+    assert cv.domain_key("hue 1") == "hue"
+    assert cv.domain_key("hue  1") == "hue"
+
+
+def test_color_hex() -> None:
+    """Test color validation in hex format."""
+    assert cv.color_hex("#123456") == "#123456"
+    assert cv.color_hex("#FFaaFF") == "#FFaaFF"
+    assert cv.color_hex("#FFFFFF") == "#FFFFFF"
+    assert cv.color_hex("#000000") == "#000000"
+
+    msg = r"Color should be in the format #RRGGBB"
+    with pytest.raises(probatio.Invalid, match=msg):
+        cv.color_hex("#777")
+
+    with pytest.raises(probatio.Invalid, match=msg):
+        cv.color_hex("FFFFF")
+
+    with pytest.raises(probatio.Invalid, match=msg):
+        cv.color_hex("FFFFFF")
+
+    with pytest.raises(probatio.Invalid, match=msg):
+        cv.color_hex("#FFFFFFF")
+
+    with pytest.raises(probatio.Invalid, match=msg):
+        cv.color_hex(123456)
+
+
+def test_determine_script_action_ambiguous() -> None:
+    """Test determine script action with ambiguous actions."""
+    assert (
+        cv.determine_script_action(
+            {
+                "type": "is_power",
+                "condition": "device",
+                "device_id": "9c2bda81bc7997c981f811c32cafdb22",
+                "entity_id": "2ee287ec70dd0c6db187b539bee429b7",
+                "domain": "sensor",
+                "below": "15",
+            }
+        )
+        == "condition"
+    )
+
+
+def test_determine_script_action_non_ambiguous() -> None:
+    """Test determine script action with a non ambiguous action."""
+    assert cv.determine_script_action({"delay": "00:00:05"}) == "delay"
+
+
+async def test_async_validate(hass: HomeAssistant, tmpdir: py.path.local) -> None:
+    """Test the async_validate helper."""
+    validator_calls: dict[str, list[int]] = {}
+
+    def _mock_validator_schema(real_func, *args):
+        calls = validator_calls.setdefault(real_func.__name__, [])
+        calls.append(threading.get_ident())
+        return real_func(*args)
+
+    CV_PREFIX = "homeassistant.helpers.config_validation"
+    with (
+        patch(f"{CV_PREFIX}.isdir", wraps=partial(_mock_validator_schema, cv.isdir)),
+        patch(f"{CV_PREFIX}.string", wraps=partial(_mock_validator_schema, cv.string)),
+    ):
+        # Assert validation in event loop when not decorated with not_async_friendly
+        await cv.async_validate(hass, cv.string, "abcd")
+        assert validator_calls == {"string": [hass.loop_thread_id]}
+        validator_calls = {}
+
+        # Assert validation in executor when decorated with not_async_friendly
+        await cv.async_validate(hass, cv.isdir, tmpdir)
+        assert validator_calls == {"isdir": [hass.loop_thread_id, ANY]}
+        assert validator_calls["isdir"][1] != hass.loop_thread_id
+        validator_calls = {}
+
+        # Assert validation in executor when decorated with not_async_friendly
+        await cv.async_validate(hass, probatio.All(cv.isdir, cv.string), tmpdir)
+        assert validator_calls == {"isdir": [hass.loop_thread_id, ANY], "string": [ANY]}
+        assert validator_calls["isdir"][1] != hass.loop_thread_id
+        assert validator_calls["string"][0] != hass.loop_thread_id
+        validator_calls = {}
+
+        # Assert validation in executor when decorated with not_async_friendly
+        await cv.async_validate(hass, probatio.All(cv.string, cv.isdir), tmpdir)
+        assert validator_calls == {
+            "isdir": [hass.loop_thread_id, ANY],
+            "string": [hass.loop_thread_id, ANY],
+        }
+        assert validator_calls["isdir"][1] != hass.loop_thread_id
+        assert validator_calls["string"][1] != hass.loop_thread_id
+        validator_calls = {}
+
+        # Assert validation in event loop when not using cv.async_validate
+        cv.isdir(tmpdir)
+        assert validator_calls == {"isdir": [hass.loop_thread_id]}
+        validator_calls = {}
+
+        # Assert validation in event loop when not using cv.async_validate
+        probatio.All(cv.isdir, cv.string)(tmpdir)
+        assert validator_calls == {
+            "isdir": [hass.loop_thread_id],
+            "string": [hass.loop_thread_id],
+        }
+        validator_calls = {}
+
+        # Assert validation in event loop when not using cv.async_validate
+        probatio.All(cv.string, cv.isdir)(tmpdir)
+        assert validator_calls == {
+            "isdir": [hass.loop_thread_id],
+            "string": [hass.loop_thread_id],
+        }
+        validator_calls = {}
+
+
+async def test_nested_trigger_list() -> None:
+    """Test triggers within nested lists are flattened."""
+
+    trigger_config = [
+        {
+            "triggers": {
+                "platform": "event",
+                "event_type": "trigger_1",
+            },
+        },
+        {
+            "platform": "event",
+            "event_type": "trigger_2",
+        },
+        {"triggers": []},
+        {"triggers": None},
+        {
+            "triggers": [
+                {
+                    "platform": "event",
+                    "event_type": "trigger_3",
+                },
+                {
+                    "trigger": "event",
+                    "event_type": "trigger_4",
+                },
+            ],
+        },
+    ]
+
+    validated_triggers = TRIGGER_SCHEMA(trigger_config)
+
+    assert validated_triggers == [
+        {
+            "platform": "event",
+            "event_type": "trigger_1",
+        },
+        {
+            "platform": "event",
+            "event_type": "trigger_2",
+        },
+        {
+            "platform": "event",
+            "event_type": "trigger_3",
+        },
+        {
+            "platform": "event",
+            "event_type": "trigger_4",
+        },
+    ]
+
+
+async def test_nested_trigger_list_extra() -> None:
+    """Test triggers key with extra keys is not modified."""
+
+    trigger_config = [
+        {
+            "platform": "other",
+            "triggers": [
+                {
+                    "platform": "event",
+                    "event_type": "trigger_1",
+                },
+                {
+                    "platform": "event",
+                    "event_type": "trigger_2",
+                },
+            ],
+        },
+    ]
+
+    validated_triggers = TRIGGER_SCHEMA(trigger_config)
+
+    assert validated_triggers == [
+        {
+            "platform": "other",
+            "triggers": [
+                {
+                    "platform": "event",
+                    "event_type": "trigger_1",
+                },
+                {
+                    "platform": "event",
+                    "event_type": "trigger_2",
+                },
+            ],
+        },
+    ]
+
+
+async def test_trigger_backwards_compatibility() -> None:
+    """Test triggers with backwards compatibility."""
+
+    assert cv._trigger_pre_validator("str") == "str"
+    assert cv._trigger_pre_validator({"platform": "abc"}) == {"platform": "abc"}
+    assert cv._trigger_pre_validator({"trigger": "abc"}) == {"platform": "abc"}
+    with pytest.raises(
+        probatio.Invalid,
+        match=(
+            "Cannot specify both 'platform' and 'trigger'. Please use 'trigger' only."
+        ),
+    ):
+        cv._trigger_pre_validator({"trigger": "abc", "platform": "def"})
+    with pytest.raises(
+        probatio.Invalid,
+        match=re.escape("required key not provided at 'trigger'"),
+    ):
+        cv._trigger_pre_validator({})
+
+
+async def test_is_entity_service_schema(
+    hass: HomeAssistant,
+) -> None:
+    """Test cv.is_entity_service_schema."""
+    for schema in (
+        probatio.Schema({"some": str}),
+        probatio.All(probatio.Schema({"some": str})),
+        probatio.Any(probatio.Schema({"some": str})),
+        probatio.Any(cv.make_entity_service_schema({"some": str})),
+    ):
+        assert cv.is_entity_service_schema(schema) is False
+
+    for schema in (
+        cv.make_entity_service_schema({"some": str}),
+        probatio.Schema(cv.make_entity_service_schema({"some": str})),
+        probatio.Schema(probatio.All(cv.make_entity_service_schema({"some": str}))),
+        probatio.Schema(probatio.Schema(cv.make_entity_service_schema({"some": str}))),
+        probatio.All(cv.make_entity_service_schema({"some": str})),
+        probatio.All(probatio.All(cv.make_entity_service_schema({"some": str}))),
+        probatio.All(probatio.Schema(cv.make_entity_service_schema({"some": str}))),
+    ):
+        assert cv.is_entity_service_schema(schema) is True
+
+
+def test_renamed(caplog: pytest.LogCaptureFixture, schema) -> None:
+    """Test renamed."""
+    renamed_schema = probatio.All(cv.renamed("mors", "mars"), schema)
+
+    test_data = {"mars": True}
+    output = renamed_schema(test_data.copy())
+    assert len(caplog.records) == 0
+    assert output == test_data
+
+    test_data = {"mors": True}
+    output = renamed_schema(test_data.copy())
+    assert len(caplog.records) == 0
+    assert output == {"mars": True}
+
+    test_data = {"mars": True, "mors": True}
+    with pytest.raises(
+        probatio.Invalid,
+        match="Cannot specify both 'mors' and 'mars'. Please use 'mars' only.",
+    ):
+        renamed_schema(test_data.copy())
+    assert len(caplog.records) == 0
+
+    # Check error handling if data is not a dict
+    with pytest.raises(probatio.Invalid, match="expected a mapping"):
+        renamed_schema([])
+
+
+def test_stop_action_schema_error_false_with_response() -> None:
+    """Test stop action allows error: false with response_variable."""
+    schema = cv._SCRIPT_STOP_SCHEMA
+
+    # error: true with response_variable should fail
+    with pytest.raises(probatio.Invalid, match="not allowed to add a response"):
+        schema({"stop": "Error", "error": True, "response_variable": "result"})
+
+    # error: false with response_variable should work
+    config = schema({"stop": "Done", "error": False, "response_variable": "result"})
+    assert config["error"] is False
+    assert config["response_variable"] == "result"
+
+    # no error with response_variable should work
+    config = schema({"stop": "Done", "response_variable": "result"})
+    assert config["response_variable"] == "result"
+
+
+_NOTE_SCHEMA_PARAMS = [
+    pytest.param(
+        cv.TRIGGER_BASE_SCHEMA,
+        {"platform": "event"},
+        id="trigger_base",
+    ),
+    pytest.param(
+        cv.CONDITION_SCHEMA,
+        {"condition": "state", "entity_id": "sun.sun", "state": "above_horizon"},
+        id="condition",
+    ),
+    pytest.param(
+        cv.script_action,
+        {"action": "test.foo"},
+        id="script_action",
+    ),
+]
+
+
+@pytest.mark.parametrize(("validator", "base_config"), _NOTE_SCHEMA_PARAMS)
+@pytest.mark.usefixtures("hass")
+def test_base_schemas_accept_note(
+    validator: Callable[[dict[str, Any]], dict[str, Any]],
+    base_config: dict[str, Any],
+) -> None:
+    """Test that the note field is accepted and stripped from the output."""
+    validated = validator({**base_config, "note": "Single line"})
+    assert "note" not in validated
+
+
+@pytest.mark.parametrize(("validator", "base_config"), _NOTE_SCHEMA_PARAMS)
+@pytest.mark.parametrize(
+    "invalid_note",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(42, id="int"),
+        pytest.param(True, id="bool"),
+        pytest.param([], id="list"),
+        pytest.param({}, id="dict"),
+    ],
+)
+@pytest.mark.usefixtures("hass")
+def test_base_schemas_reject_invalid_note(
+    validator: Callable[[dict[str, Any]], dict[str, Any]],
+    base_config: dict[str, Any],
+    invalid_note: Any,
+) -> None:
+    """Test that script, condition, trigger base schemas reject non-string notes."""
+    with pytest.raises(probatio.Invalid):
+        validator({**base_config, "note": invalid_note})
+
+
+_CHOOSE_OPTION_BASE_CONFIG = {
+    "conditions": [
+        {"condition": "state", "entity_id": "sun.sun", "state": "above_horizon"}
+    ],
+    "sequence": [{"action": "test.foo"}],
+}
+
+
+@pytest.mark.usefixtures("hass")
+def test_choose_option_accepts_note() -> None:
+    """Test that the note field is accepted and stripped from a choose option."""
+    validated = cv.script_action(
+        {"choose": [{**_CHOOSE_OPTION_BASE_CONFIG, "note": "Single line"}]}
+    )
+    assert "note" not in validated["choose"][0]
+
+
+@pytest.mark.parametrize(
+    "invalid_note",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(42, id="int"),
+        pytest.param(True, id="bool"),
+        pytest.param([], id="list"),
+        pytest.param({}, id="dict"),
+    ],
+)
+@pytest.mark.usefixtures("hass")
+def test_choose_option_rejects_invalid_note(invalid_note: Any) -> None:
+    """Test that choose option schemas reject non-string notes."""
+    with pytest.raises(probatio.Invalid):
+        cv.script_action(
+            {"choose": [{**_CHOOSE_OPTION_BASE_CONFIG, "note": invalid_note}]}
+        )

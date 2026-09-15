@@ -1,16 +1,16 @@
 """Component providing HA sensor support for Travis CI framework."""
-from __future__ import annotations
 
 from datetime import timedelta
 import logging
+from typing import Any, override
 
+import probatio
 from travispy import TravisPy
 from travispy.errors import TravisError
-import voluptuous as vol
 
 from homeassistant.components import persistent_notification
 from homeassistant.components.sensor import (
-    PLATFORM_SCHEMA,
+    PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
     SensorEntity,
     SensorEntityDescription,
 )
@@ -21,7 +21,7 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
@@ -73,15 +73,17 @@ SENSOR_KEYS: list[str] = [desc.key for desc in SENSOR_TYPES]
 NOTIFICATION_ID = "travisci"
 NOTIFICATION_TITLE = "Travis CI Sensor Setup"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
     {
-        vol.Required(CONF_API_KEY): cv.string,
-        vol.Required(CONF_MONITORED_CONDITIONS, default=SENSOR_KEYS): vol.All(
-            cv.ensure_list, [vol.In(SENSOR_KEYS)]
+        probatio.Required(CONF_API_KEY): cv.string,
+        probatio.Required(CONF_MONITORED_CONDITIONS, default=SENSOR_KEYS): probatio.All(
+            cv.ensure_list, [probatio.In(SENSOR_KEYS)]
         ),
-        vol.Required(CONF_BRANCH, default=DEFAULT_BRANCH_NAME): cv.string,
-        vol.Optional(CONF_REPOSITORY, default=[]): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional(CONF_SCAN_INTERVAL, default=SCAN_INTERVAL): cv.time_period,
+        probatio.Required(CONF_BRANCH, default=DEFAULT_BRANCH_NAME): cv.string,
+        probatio.Optional(CONF_REPOSITORY, default=[]): probatio.All(
+            cv.ensure_list, [cv.string]
+        ),
+        probatio.Optional(CONF_SCAN_INTERVAL, default=SCAN_INTERVAL): cv.time_period,
     }
 )
 
@@ -153,9 +155,10 @@ class TravisCISensor(SensorEntity):
         self._attr_name = f"{repo_name} {description.name}"
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
-        attrs = {}
+        attrs: dict[str, Any] = {}
 
         if self._build and self._attr_native_value is not None:
             if self._user and self.entity_description.key == "state":

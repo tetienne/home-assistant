@@ -1,7 +1,8 @@
 """Support for launching a web browser on the host machine."""
+
 import webbrowser
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
@@ -14,10 +15,9 @@ DOMAIN = "browser"
 
 SERVICE_BROWSE_URL = "browse_url"
 
-SERVICE_BROWSE_URL_SCHEMA = vol.Schema(
+SERVICE_BROWSE_URL_SCHEMA = probatio.Schema(
     {
-        # pylint: disable-next=no-value-for-parameter
-        vol.Required(ATTR_URL, default=ATTR_URL_DEFAULT): vol.Url()
+        probatio.Required(ATTR_URL, default=ATTR_URL_DEFAULT): probatio.Url(),
     }
 )
 

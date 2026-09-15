@@ -1,33 +1,28 @@
 """Support for azure service bus notification."""
-from __future__ import annotations
 
 import json
 import logging
+from typing import Any, override
 
-# pylint: disable-next=import-error, no-name-in-module
 from azure.servicebus import ServiceBusMessage
-
-# pylint: disable-next=import-error, no-name-in-module
 from azure.servicebus.aio import ServiceBusClient, ServiceBusSender
-
-# pylint: disable-next=import-error, no-name-in-module
 from azure.servicebus.exceptions import (
     MessagingEntityNotFoundError,
     ServiceBusConnectionError,
     ServiceBusError,
 )
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.notify import (
     ATTR_DATA,
     ATTR_TARGET,
     ATTR_TITLE,
-    PLATFORM_SCHEMA,
+    PLATFORM_SCHEMA as NOTIFY_PLATFORM_SCHEMA,
     BaseNotificationService,
 )
 from homeassistant.const import CONTENT_TYPE_JSON
 from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 CONF_CONNECTION_STRING = "connection_string"
@@ -38,15 +33,15 @@ ATTR_ASB_MESSAGE = "message"
 ATTR_ASB_TITLE = "title"
 ATTR_ASB_TARGET = "target"
 
-PLATFORM_SCHEMA = vol.All(
+PLATFORM_SCHEMA = probatio.All(
     cv.has_at_least_one_key(CONF_QUEUE_NAME, CONF_TOPIC_NAME),
-    PLATFORM_SCHEMA.extend(
+    NOTIFY_PLATFORM_SCHEMA.extend(
         {
-            vol.Required(CONF_CONNECTION_STRING): cv.string,
-            vol.Exclusive(
+            probatio.Required(CONF_CONNECTION_STRING): cv.string,
+            probatio.Exclusive(
                 CONF_QUEUE_NAME, "output", "Can only send to a queue or a topic."
             ): cv.string,
-            vol.Exclusive(
+            probatio.Exclusive(
                 CONF_TOPIC_NAME, "output", "Can only send to a queue or a topic."
             ): cv.string,
         }
@@ -96,7 +91,8 @@ class ServiceBusNotificationService(BaseNotificationService):
         """Initialize the service."""
         self._client = client
 
-    async def async_send_message(self, message, **kwargs):
+    @override
+    async def async_send_message(self, message: str, **kwargs: Any) -> None:
         """Send a message."""
         dto = {ATTR_ASB_MESSAGE: message}
 
@@ -113,6 +109,7 @@ class ServiceBusNotificationService(BaseNotificationService):
         )
         try:
             await self._client.send_messages(queue_message)
+        # pylint: disable-next=home-assistant-action-swallowed-exception
         except ServiceBusError as err:
             _LOGGER.error(
                 "Could not send service bus notification to %s. %s",

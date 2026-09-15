@@ -1,6 +1,4 @@
 """Constants for the Discovergy integration."""
-from __future__ import annotations
 
 DOMAIN = "discovergy"
-MANUFACTURER = "Discovergy"
-APP_NAME = "homeassistant"
+MANUFACTURER = "inexogy"

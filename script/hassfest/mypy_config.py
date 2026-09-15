@@ -1,5 +1,4 @@
 """Generate mypy config."""
-from __future__ import annotations
 
 from collections.abc import Iterable
 import configparser
@@ -31,28 +30,50 @@ HEADER: Final = """
 
 GENERAL_SETTINGS: Final[dict[str, str]] = {
     "python_version": ".".join(str(x) for x in REQUIRED_PYTHON_VER[:2]),
-    "plugins": ", ".join(["pydantic.mypy"]),
+    "platform": "linux",
+    # voluptuous is aliased to probatio at runtime; this stub path re-exports
+    # probatio's types under the voluptuous name for not-yet-migrated integrations.
+    "mypy_path": "stubs",
+    "plugins": ", ".join(  # noqa: FLY002
+        [
+            "pydantic.mypy",
+            "mypy_plugins/enum_identity_compare.py",
+        ]
+    ),
     "show_error_codes": "true",
-    "follow_imports": "silent",
+    "follow_imports": "normal",
+    "native_parser": "true",
+    "num_workers": "2",  # Use a conservative value here
+    # "enable_incomplete_feature": ", ".join(
+    #     []
+    # ),
     # Enable some checks globally.
-    "ignore_missing_imports": "true",
     "local_partial_types": "true",
     "strict_equality": "true",
+    "strict_bytes": "true",
     "no_implicit_optional": "true",
     "warn_incomplete_stub": "true",
     "warn_redundant_casts": "true",
-    "warn_unused_configs": "true",
     "warn_unused_ignores": "true",
-    "enable_error_code": ", ".join(
+    "enable_error_code": ", ".join(  # noqa: FLY002
         [
+            "deprecated",
+            "explicit-override",
             "ignore-without-code",
             "redundant-self",
             "truthy-iterable",
         ]
     ),
-    "disable_error_code": ", ".join(["annotation-unchecked"]),
-    # Strict_concatenate breaks passthrough ParamSpec typing
-    "strict_concatenate": "false",
+    "disable_error_code": ", ".join(  # noqa: FLY002
+        [
+            "annotation-unchecked",
+            "import-not-found",
+            "import-untyped",
+        ]
+    ),
+    # Impractical in real code
+    # E.g. this breaks passthrough ParamSpec typing with Concatenate
+    "extra_checks": "false",
 }
 
 # This is basically the list of checks which is enabled for "strict=true".

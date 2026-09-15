@@ -1,28 +1,26 @@
 """Tests for honeywell config flow."""
-import asyncio
+
 from unittest.mock import MagicMock, patch
 
 import aiosomecomfort
 import pytest
 
-from homeassistant import data_entry_flow
 from homeassistant.components.honeywell.const import (
     CONF_COOL_AWAY_TEMPERATURE,
     CONF_HEAT_AWAY_TEMPERATURE,
     DOMAIN,
 )
-from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER, ConfigEntryState
+from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 from tests.common import MockConfigEntry
 
+# The away temperatures are options, not fields on the user form.
 FAKE_CONFIG = {
     "username": "fake",
     "password": "user",
-    "away_cool_temperature": 88,
-    "away_heat_temperature": 61,
 }
 
 
@@ -33,7 +31,7 @@ async def test_show_authenticate_form(hass: HomeAssistant) -> None:
         context={"source": SOURCE_USER},
     )
 
-    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
 
 
@@ -41,7 +39,15 @@ async def test_connection_error(hass: HomeAssistant, client: MagicMock) -> None:
     """Test that an error message is shown on connection fail."""
     client.login.side_effect = aiosomecomfort.device.ConnectionError
     result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}, data=FAKE_CONFIG
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input=FAKE_CONFIG,
     )
     assert result["errors"] == {"base": "cannot_connect"}
 
@@ -51,7 +57,15 @@ async def test_auth_error(hass: HomeAssistant, client: MagicMock) -> None:
     client.login.side_effect = aiosomecomfort.device.AuthError
 
     result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}, data=FAKE_CONFIG
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input=FAKE_CONFIG,
     )
     assert result["errors"] == {"base": "invalid_auth"}
 
@@ -63,11 +77,19 @@ async def test_create_entry(hass: HomeAssistant) -> None:
         return_value=True,
     ):
         result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_USER}, data=FAKE_CONFIG
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "user"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=FAKE_CONFIG,
         )
         await hass.async_block_till_done()
 
-    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == FAKE_CONFIG
 
 
@@ -87,7 +109,7 @@ async def test_show_option_form(
     ):
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
-    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
 
 
@@ -114,7 +136,7 @@ async def test_create_option_entry(
         )
         await hass.async_block_till_done()
 
-    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert config_entry.options == {
         CONF_COOL_AWAY_TEMPERATURE: 1,
         CONF_HEAT_AWAY_TEMPERATURE: 2,
@@ -130,24 +152,10 @@ async def test_reauth_flow(hass: HomeAssistant) -> None:
         unique_id="test-username",
     )
     mock_entry.add_to_hass(hass)
-    with patch(
-        "homeassistant.components.honeywell.async_setup_entry",
-        return_value=True,
-    ):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN,
-            context={
-                "source": SOURCE_REAUTH,
-                "unique_id": mock_entry.unique_id,
-                "entry_id": mock_entry.entry_id,
-            },
-            data={CONF_USERNAME: "test-username", CONF_PASSWORD: "new-password"},
-        )
-
-    await hass.async_block_till_done()
+    result = await mock_entry.start_reauth_flow(hass)
 
     assert result["step_id"] == "reauth_confirm"
-    assert result["type"] == FlowResultType.FORM
+    assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {}
 
     with patch(
@@ -156,14 +164,14 @@ async def test_reauth_flow(hass: HomeAssistant) -> None:
     ):
         result2 = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_PASSWORD: "new-password"},
+            {CONF_USERNAME: "new-username", CONF_PASSWORD: "new-password"},
         )
         await hass.async_block_till_done()
 
-    assert result2["type"] == FlowResultType.ABORT
+    assert result2["type"] is FlowResultType.ABORT
     assert result2["reason"] == "reauth_successful"
     assert mock_entry.data == {
-        CONF_USERNAME: "test-username",
+        CONF_USERNAME: "new-username",
         CONF_PASSWORD: "new-password",
     }
 
@@ -178,19 +186,10 @@ async def test_reauth_flow_auth_error(hass: HomeAssistant, client: MagicMock) ->
     )
     mock_entry.add_to_hass(hass)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={
-            "source": SOURCE_REAUTH,
-            "unique_id": mock_entry.unique_id,
-            "entry_id": mock_entry.entry_id,
-        },
-        data={CONF_USERNAME: "test-username", CONF_PASSWORD: "new-password"},
-    )
-    await hass.async_block_till_done()
+    result = await mock_entry.start_reauth_flow(hass)
 
     assert result["step_id"] == "reauth_confirm"
-    assert result["type"] == FlowResultType.FORM
+    assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {}
 
     client.login.side_effect = aiosomecomfort.device.AuthError
@@ -200,11 +199,11 @@ async def test_reauth_flow_auth_error(hass: HomeAssistant, client: MagicMock) ->
     ):
         result2 = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_PASSWORD: "new-password"},
+            {CONF_USERNAME: "new-username", CONF_PASSWORD: "new-password"},
         )
         await hass.async_block_till_done()
 
-    assert result2["type"] == FlowResultType.FORM
+    assert result2["type"] is FlowResultType.FORM
     assert result2["errors"] == {"base": "invalid_auth"}
 
 
@@ -213,7 +212,7 @@ async def test_reauth_flow_auth_error(hass: HomeAssistant, client: MagicMock) ->
     [
         aiosomecomfort.device.ConnectionError,
         aiosomecomfort.device.ConnectionTimeout,
-        asyncio.TimeoutError,
+        TimeoutError,
     ],
 )
 async def test_reauth_flow_connnection_error(
@@ -227,28 +226,18 @@ async def test_reauth_flow_connnection_error(
         unique_id="test-username",
     )
     mock_entry.add_to_hass(hass)
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={
-            "source": SOURCE_REAUTH,
-            "unique_id": mock_entry.unique_id,
-            "entry_id": mock_entry.entry_id,
-        },
-        data={CONF_USERNAME: "test-username", CONF_PASSWORD: "new-password"},
-    )
-    await hass.async_block_till_done()
-
+    result = await mock_entry.start_reauth_flow(hass)
     assert result["step_id"] == "reauth_confirm"
-    assert result["type"] == FlowResultType.FORM
+    assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {}
 
     client.login.side_effect = error
 
     result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {CONF_PASSWORD: "new-password"},
+        {CONF_USERNAME: "new-username", CONF_PASSWORD: "new-password"},
     )
     await hass.async_block_till_done()
 
-    assert result2["type"] == FlowResultType.FORM
+    assert result2["type"] is FlowResultType.FORM
     assert result2["errors"] == {"base": "cannot_connect"}

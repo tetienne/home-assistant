@@ -1,5 +1,4 @@
 """Provide tests for mysensors text platform."""
-from __future__ import annotations
 
 from collections.abc import Callable
 from unittest.mock import MagicMock, call
@@ -12,7 +11,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.const import ATTR_BATTERY_LEVEL, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 
 
@@ -29,6 +28,7 @@ async def test_text_node(
 
     assert state
     assert state.state == "test"
+    assert state.attributes[ATTR_BATTERY_LEVEL] == 0
 
     await hass.services.async_call(
         TEXT_DOMAIN,

@@ -1,19 +1,18 @@
 """RESTful platform for notify component."""
-from __future__ import annotations
 
 from http import HTTPStatus
 import logging
-from typing import Any
+from typing import Any, override
 
 import httpx
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.notify import (
     ATTR_MESSAGE,
     ATTR_TARGET,
     ATTR_TITLE,
     ATTR_TITLE_DEFAULT,
-    PLATFORM_SCHEMA,
+    PLATFORM_SCHEMA as NOTIFY_PLATFORM_SCHEMA,
     BaseNotificationService,
 )
 from homeassistant.const import (
@@ -30,7 +29,7 @@ from homeassistant.const import (
     HTTP_DIGEST_AUTHENTICATION,
 )
 from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.template import Template
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -44,28 +43,28 @@ DEFAULT_MESSAGE_PARAM_NAME = "message"
 DEFAULT_METHOD = "GET"
 DEFAULT_VERIFY_SSL = True
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+PLATFORM_SCHEMA = NOTIFY_PLATFORM_SCHEMA.extend(
     {
-        vol.Required(CONF_RESOURCE): cv.url,
-        vol.Optional(
+        probatio.Required(CONF_RESOURCE): cv.url,
+        probatio.Optional(
             CONF_MESSAGE_PARAMETER_NAME, default=DEFAULT_MESSAGE_PARAM_NAME
         ): cv.string,
-        vol.Optional(CONF_METHOD, default=DEFAULT_METHOD): vol.In(
+        probatio.Optional(CONF_METHOD, default=DEFAULT_METHOD): probatio.In(
             ["POST", "GET", "POST_JSON"]
         ),
-        vol.Optional(CONF_HEADERS): vol.Schema({cv.string: cv.string}),
-        vol.Optional(CONF_PARAMS): vol.Schema({cv.string: cv.string}),
-        vol.Optional(CONF_NAME): cv.string,
-        vol.Optional(CONF_TARGET_PARAMETER_NAME): cv.string,
-        vol.Optional(CONF_TITLE_PARAMETER_NAME): cv.string,
-        vol.Optional(CONF_DATA): vol.All(dict, cv.template_complex),
-        vol.Optional(CONF_DATA_TEMPLATE): vol.All(dict, cv.template_complex),
-        vol.Optional(CONF_AUTHENTICATION): vol.In(
+        probatio.Optional(CONF_HEADERS): probatio.Schema({cv.string: cv.string}),
+        probatio.Optional(CONF_PARAMS): probatio.Schema({cv.string: cv.string}),
+        probatio.Optional(CONF_NAME): cv.string,
+        probatio.Optional(CONF_TARGET_PARAMETER_NAME): cv.string,
+        probatio.Optional(CONF_TITLE_PARAMETER_NAME): cv.string,
+        probatio.Optional(CONF_DATA): probatio.All(dict, cv.template_complex),
+        probatio.Optional(CONF_DATA_TEMPLATE): probatio.All(dict, cv.template_complex),
+        probatio.Optional(CONF_AUTHENTICATION): probatio.In(
             [HTTP_BASIC_AUTHENTICATION, HTTP_DIGEST_AUTHENTICATION]
         ),
-        vol.Optional(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_USERNAME): cv.string,
-        vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
+        probatio.Optional(CONF_PASSWORD): cv.string,
+        probatio.Optional(CONF_USERNAME): cv.string,
+        probatio.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
     }
 )
 
@@ -146,6 +145,7 @@ class RestNotificationService(BaseNotificationService):
         self._auth = auth
         self._verify_ssl = verify_ssl
 
+    @override
     async def async_send_message(self, message: str = "", **kwargs: Any) -> None:
         """Send a message to a user."""
         data = {self._message_param_name: message}
@@ -171,7 +171,6 @@ class RestNotificationService(BaseNotificationService):
                     }
                 if not isinstance(value, Template):
                     return value
-                value.hass = self._hass
                 return value.async_render(kwargs, parse_result=False)
 
             if self._data:

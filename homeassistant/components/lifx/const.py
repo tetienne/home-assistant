@@ -1,8 +1,15 @@
 """Const for LIFX."""
 
 import logging
+from typing import TYPE_CHECKING
+
+from homeassistant.util.hass_dict import HassKey
+
+if TYPE_CHECKING:
+    from .manager import LIFXManager
 
 DOMAIN = "lifx"
+DATA_LIFX_MANAGER: HassKey[LIFXManager] = HassKey(DOMAIN)
 
 TARGET_ANY = "00:00:00:00:00:00"
 
@@ -51,6 +58,31 @@ ATTR_ZONES = "zones"
 
 ATTR_THEME = "theme"
 
+ATTR_CHANGE = "change"
+ATTR_CLOUD_SATURATION_MAX = "cloud_saturation_max"
+ATTR_CLOUD_SATURATION_MIN = "cloud_saturation_min"
+ATTR_CYCLES = "cycles"
+ATTR_DIRECTION = "direction"
+ATTR_PALETTE = "palette"
+ATTR_PERIOD = "period"
+ATTR_POWER_ON = "power_on"
+ATTR_SATURATION_MAX = "saturation_max"
+ATTR_SATURATION_MIN = "saturation_min"
+ATTR_SKY_TYPE = "sky_type"
+ATTR_SPEED = "speed"
+ATTR_SPREAD = "spread"
+
+SERVICE_EFFECT_COLORLOOP = "effect_colorloop"
+SERVICE_EFFECT_FLAME = "effect_flame"
+SERVICE_EFFECT_MORPH = "effect_morph"
+SERVICE_EFFECT_MOVE = "effect_move"
+SERVICE_EFFECT_PULSE = "effect_pulse"
+SERVICE_EFFECT_SKY = "effect_sky"
+SERVICE_EFFECT_STOP = "effect_stop"
+SERVICE_PAINT_THEME = "paint_theme"
+SERVICE_SET_HEV_CYCLE_STATE = "set_hev_cycle_state"
+SERVICE_SET_STATE = "set_state"
+
 HEV_CYCLE_STATE = "hev_cycle_state"
 INFRARED_BRIGHTNESS = "infrared_brightness"
 INFRARED_BRIGHTNESS_VALUES_MAP = {
@@ -59,7 +91,8 @@ INFRARED_BRIGHTNESS_VALUES_MAP = {
     32767: "50%",
     65535: "100%",
 }
-DATA_LIFX_MANAGER = "lifx_manager"
 
+LIFX_CEILING_PRODUCT_IDS = {176, 177, 201, 202}
+LIFX_128ZONE_CEILING_PRODUCT_IDS = {201, 202}
 
-_LOGGER = logging.getLogger(__package__)
+LOGGER = logging.getLogger(__package__)

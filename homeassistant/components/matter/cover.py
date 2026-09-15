@@ -1,9 +1,9 @@
 """Matter cover."""
-from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import IntEnum
 from math import floor
-from typing import Any
+from typing import Any, override
 
 from chip.clusters import Objects as clusters
 
@@ -15,28 +15,41 @@ from homeassistant.components.cover import (
     CoverEntityDescription,
     CoverEntityFeature,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import LOGGER
-from .entity import MatterEntity
-from .helpers import get_matter
+from .entity import MatterEntity, MatterEntityDescription
+from .helpers import MatterConfigEntry
 from .models import MatterDiscoverySchema
 
 # The MASK used for extracting bits 0 to 1 of the byte.
 OPERATIONAL_STATUS_MASK = 0b11
 
+# Cover state is derived from both the operational status and the current
+# position, which some devices report as separate attribute updates shortly
+# after each other (e.g. stopped before the final position). Debounce state
+# writes to avoid writing intermittent states.
+STATE_WRITE_DEBOUNCE_COOLDOWN = 0.1
+
 # map Matter window cover types to HA device class
 TYPE_MAP = {
+    clusters.WindowCovering.Enums.Type.kRollerShade: CoverDeviceClass.SHADE,
+    clusters.WindowCovering.Enums.Type.kRollerShade2Motor: CoverDeviceClass.SHADE,
+    clusters.WindowCovering.Enums.Type.kRollerShadeExterior: CoverDeviceClass.SHADE,
+    clusters.WindowCovering.Enums.Type.kRollerShadeExterior2Motor: (
+        CoverDeviceClass.SHADE
+    ),
     clusters.WindowCovering.Enums.Type.kAwning: CoverDeviceClass.AWNING,
     clusters.WindowCovering.Enums.Type.kDrapery: CoverDeviceClass.CURTAIN,
+    clusters.WindowCovering.Enums.Type.kTiltBlindTiltOnly: CoverDeviceClass.BLIND,
+    clusters.WindowCovering.Enums.Type.kTiltBlindLiftAndTilt: CoverDeviceClass.BLIND,
 }
 
 
 class OperationalStatus(IntEnum):
-    """Currently ongoing operations enumeration for coverings, as defined in the Matter spec."""
+    """Ongoing operations enumeration for coverings per Matter spec."""
 
     COVERING_IS_CURRENTLY_NOT_MOVING = 0b00
     COVERING_IS_CURRENTLY_OPENING = 0b01
@@ -46,22 +59,29 @@ class OperationalStatus(IntEnum):
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: MatterConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up Matter Cover from Config Entry."""
-    matter = get_matter(hass)
+    matter = config_entry.runtime_data.adapter
     matter.register_platform_handler(Platform.COVER, async_add_entities)
+
+
+@dataclass(frozen=True, kw_only=True)
+class MatterCoverEntityDescription(CoverEntityDescription, MatterEntityDescription):
+    """Describe Matter Cover entities."""
 
 
 class MatterCover(MatterEntity, CoverEntity):
     """Representation of a Matter Cover."""
 
-    entity_description: CoverEntityDescription
+    _write_state_debounce_cooldown = STATE_WRITE_DEBOUNCE_COOLDOWN
+    entity_description: MatterCoverEntityDescription
 
     @property
+    @override
     def is_closed(self) -> bool | None:
-        """Return true if cover is closed, if there is no position report, return None."""
+        """Return true if cover is closed, None if no position."""
         if not self._entity_info.endpoint.has_attribute(
             None, clusters.WindowCovering.Attributes.CurrentPositionLiftPercent100ths
         ):
@@ -73,18 +93,22 @@ class MatterCover(MatterEntity, CoverEntity):
             else None
         )
 
+    @override
     async def async_stop_cover(self, **kwargs: Any) -> None:
         """Stop the cover movement."""
         await self.send_device_command(clusters.WindowCovering.Commands.StopMotion())
 
+    @override
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
         await self.send_device_command(clusters.WindowCovering.Commands.UpOrOpen())
 
+    @override
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close the cover."""
         await self.send_device_command(clusters.WindowCovering.Commands.DownOrClose())
 
+    @override
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         """Set the cover to a specific position."""
         position = kwargs[ATTR_POSITION]
@@ -93,6 +117,7 @@ class MatterCover(MatterEntity, CoverEntity):
             clusters.WindowCovering.Commands.GoToLiftPercentage((100 - position) * 100)
         )
 
+    @override
     async def async_set_cover_tilt_position(self, **kwargs: Any) -> None:
         """Set the cover tilt to a specific position."""
         position = kwargs[ATTR_TILT_POSITION]
@@ -101,15 +126,8 @@ class MatterCover(MatterEntity, CoverEntity):
             clusters.WindowCovering.Commands.GoToTiltPercentage((100 - position) * 100)
         )
 
-    async def send_device_command(self, command: Any) -> None:
-        """Send device command."""
-        await self.matter_client.send_device_command(
-            node_id=self._endpoint.node.node_id,
-            endpoint_id=self._endpoint.endpoint_id,
-            command=command,
-        )
-
     @callback
+    @override
     def _update_from_device(self) -> None:
         """Update from device."""
         operational_status = self.get_matter_attribute_value(
@@ -156,9 +174,10 @@ class MatterCover(MatterEntity, CoverEntity):
                 self.current_cover_position,
             )
 
-        if self._entity_info.endpoint.has_attribute(
+        has_tilt_position_attribute = self._entity_info.endpoint.has_attribute(
             None, clusters.WindowCovering.Attributes.CurrentPositionTiltPercent100ths
-        ):
+        )
+        if has_tilt_position_attribute:
             # current tilt position is inverted in matter (100 is closed, 0 is open)
             current_cover_tilt_position = self.get_matter_attribute_value(
                 clusters.WindowCovering.Attributes.CurrentPositionTiltPercent100ths
@@ -188,9 +207,17 @@ class MatterCover(MatterEntity, CoverEntity):
         commands = self.get_matter_attribute_value(
             clusters.WindowCovering.Attributes.AcceptedCommandList
         )
+        feature_map = self.get_matter_attribute_value(
+            clusters.WindowCovering.Attributes.FeatureMap
+        )
         if clusters.WindowCovering.Commands.GoToLiftPercentage.command_id in commands:
             supported_features |= CoverEntityFeature.SET_POSITION
-        if clusters.WindowCovering.Commands.GoToTiltPercentage.command_id in commands:
+        # Some devices report GoToTiltPercentage in AcceptedCommandList even
+        # without tilt support, so also require the FeatureMap Tilt bit.
+        if (
+            clusters.WindowCovering.Commands.GoToTiltPercentage.command_id in commands
+            and feature_map & clusters.WindowCovering.Bitmaps.Feature.kTilt
+        ):
             supported_features |= CoverEntityFeature.SET_TILT_POSITION
         self._attr_supported_features = supported_features
 
@@ -199,7 +226,10 @@ class MatterCover(MatterEntity, CoverEntity):
 DISCOVERY_SCHEMAS = [
     MatterDiscoverySchema(
         platform=Platform.COVER,
-        entity_description=CoverEntityDescription(key="MatterCover"),
+        entity_description=MatterCoverEntityDescription(
+            key="MatterCover",
+            name=None,
+        ),
         entity_class=MatterCover,
         required_attributes=(
             clusters.WindowCovering.Attributes.OperationalStatus,
@@ -212,7 +242,9 @@ DISCOVERY_SCHEMAS = [
     ),
     MatterDiscoverySchema(
         platform=Platform.COVER,
-        entity_description=CoverEntityDescription(key="MatterCoverPositionAwareLift"),
+        entity_description=MatterCoverEntityDescription(
+            key="MatterCoverPositionAwareLift", name=None
+        ),
         entity_class=MatterCover,
         required_attributes=(
             clusters.WindowCovering.Attributes.OperationalStatus,
@@ -225,7 +257,9 @@ DISCOVERY_SCHEMAS = [
     ),
     MatterDiscoverySchema(
         platform=Platform.COVER,
-        entity_description=CoverEntityDescription(key="MatterCoverPositionAwareTilt"),
+        entity_description=MatterCoverEntityDescription(
+            key="MatterCoverPositionAwareTilt", name=None
+        ),
         entity_class=MatterCover,
         required_attributes=(
             clusters.WindowCovering.Attributes.OperationalStatus,
@@ -238,14 +272,19 @@ DISCOVERY_SCHEMAS = [
     ),
     MatterDiscoverySchema(
         platform=Platform.COVER,
-        entity_description=CoverEntityDescription(
-            key="MatterCoverPositionAwareLiftAndTilt"
+        entity_description=MatterCoverEntityDescription(
+            key="MatterCoverPositionAwareLiftAndTilt", name=None
         ),
         entity_class=MatterCover,
         required_attributes=(
             clusters.WindowCovering.Attributes.OperationalStatus,
             clusters.WindowCovering.Attributes.Type,
             clusters.WindowCovering.Attributes.CurrentPositionLiftPercent100ths,
+        ),
+        # tilt is optional, not required: some devices (e.g. Shelly 2PM Gen4)
+        # report it as present but null instead of omitting it when tilt is
+        # disabled, which would otherwise fail schema matching
+        optional_attributes=(
             clusters.WindowCovering.Attributes.CurrentPositionTiltPercent100ths,
         ),
     ),

@@ -1,51 +1,69 @@
 """Test Matter covers."""
+
 from math import floor
 from unittest.mock import MagicMock, call
 
 from chip.clusters import Objects as clusters
+from freezegun.api import FrozenDateTimeFactory
+from matter_server.client.models.node import MatterNode
 import pytest
+from syrupy.assertion import SnapshotAssertion
 
-from homeassistant.components.cover import (
-    STATE_CLOSED,
-    STATE_CLOSING,
-    STATE_OPEN,
-    STATE_OPENING,
-    CoverEntityFeature,
-)
+from homeassistant.components.cover import CoverEntityFeature, CoverState
+from homeassistant.components.matter.cover import STATE_WRITE_DEBOUNCE_COOLDOWN
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from .common import (
     set_node_attribute,
-    setup_integration_with_node_fixture,
+    snapshot_matter_entities,
     trigger_subscription_callback,
 )
 
+from tests.common import async_fire_time_changed
 
-# This tests needs to be adjusted to remove lingering tasks
-@pytest.mark.parametrize("expected_lingering_tasks", [True])
+
+async def trigger_subscription_callback_debounced(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    client: MagicMock,
+) -> None:
+    """Trigger subscription callbacks and wait for the debounced state write."""
+    await trigger_subscription_callback(hass, client)
+    freezer.tick(STATE_WRITE_DEBOUNCE_COOLDOWN)
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+@pytest.mark.usefixtures("matter_devices")
+async def test_covers(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Test covers."""
+    snapshot_matter_entities(hass, entity_registry, snapshot, Platform.COVER)
+
+
 @pytest.mark.parametrize(
-    ("fixture", "entity_id"),
+    ("node_fixture", "entity_id"),
     [
-        ("window-covering_lift", "cover.mock_lift_window_covering"),
-        ("window-covering_pa-lift", "cover.longan_link_wncv_da01"),
-        ("window-covering_tilt", "cover.mock_tilt_window_covering"),
-        ("window-covering_pa-tilt", "cover.mock_pa_tilt_window_covering"),
-        ("window-covering_full", "cover.mock_full_window_covering"),
+        ("mock_window_covering_lift", "cover.mock_lift_window_covering"),
+        ("mock_window_covering_pa_lift", "cover.longan_link_wncv_da01"),
+        ("mock_window_covering_pa_lift_null_tilt", "cover.shelly_2pm_gen4"),
+        ("mock_window_covering_tilt", "cover.mock_tilt_window_covering"),
+        ("mock_window_covering_pa_tilt", "cover.mock_pa_tilt_window_covering"),
+        ("mock_window_covering_full", "cover.mock_full_window_covering"),
     ],
 )
 async def test_cover(
     hass: HomeAssistant,
     matter_client: MagicMock,
-    fixture: str,
+    matter_node: MatterNode,
     entity_id: str,
 ) -> None:
     """Test window covering commands that always are implemented."""
-
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        fixture,
-        matter_client,
-    )
 
     await hass.services.async_call(
         "cover",
@@ -58,7 +76,7 @@ async def test_cover(
 
     assert matter_client.send_device_command.call_count == 1
     assert matter_client.send_device_command.call_args == call(
-        node_id=window_covering.node_id,
+        node_id=matter_node.node_id,
         endpoint_id=1,
         command=clusters.WindowCovering.Commands.DownOrClose(),
     )
@@ -75,7 +93,7 @@ async def test_cover(
 
     assert matter_client.send_device_command.call_count == 1
     assert matter_client.send_device_command.call_args == call(
-        node_id=window_covering.node_id,
+        node_id=matter_node.node_id,
         endpoint_id=1,
         command=clusters.WindowCovering.Commands.StopMotion(),
     )
@@ -92,37 +110,30 @@ async def test_cover(
 
     assert matter_client.send_device_command.call_count == 1
     assert matter_client.send_device_command.call_args == call(
-        node_id=window_covering.node_id,
+        node_id=matter_node.node_id,
         endpoint_id=1,
         command=clusters.WindowCovering.Commands.UpOrOpen(),
     )
     matter_client.send_device_command.reset_mock()
 
 
-# This tests needs to be adjusted to remove lingering tasks
-@pytest.mark.parametrize("expected_lingering_tasks", [True])
 @pytest.mark.parametrize(
-    ("fixture", "entity_id"),
+    ("node_fixture", "entity_id"),
     [
-        ("window-covering_lift", "cover.mock_lift_window_covering"),
-        ("window-covering_pa-lift", "cover.longan_link_wncv_da01"),
-        ("window-covering_full", "cover.mock_full_window_covering"),
+        ("mock_window_covering_lift", "cover.mock_lift_window_covering"),
+        ("mock_window_covering_pa_lift", "cover.longan_link_wncv_da01"),
+        ("mock_window_covering_pa_lift_null_tilt", "cover.shelly_2pm_gen4"),
+        ("mock_window_covering_full", "cover.mock_full_window_covering"),
     ],
 )
 async def test_cover_lift(
     hass: HomeAssistant,
     matter_client: MagicMock,
-    fixture: str,
+    matter_node: MatterNode,
     entity_id: str,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test window covering devices with lift and position aware lift features."""
-
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        fixture,
-        matter_client,
-    )
-
     await hass.services.async_call(
         "cover",
         "set_cover_position",
@@ -135,93 +146,79 @@ async def test_cover_lift(
 
     assert matter_client.send_device_command.call_count == 1
     assert matter_client.send_device_command.call_args == call(
-        node_id=window_covering.node_id,
+        node_id=matter_node.node_id,
         endpoint_id=1,
         command=clusters.WindowCovering.Commands.GoToLiftPercentage(5000),
     )
     matter_client.send_device_command.reset_mock()
 
-    set_node_attribute(window_covering, 1, 258, 10, 0b001010)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 10, 0b001010)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_CLOSING
+    assert state.state == CoverState.CLOSING
 
-    set_node_attribute(window_covering, 1, 258, 10, 0b000101)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000101)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_OPENING
+    assert state.state == CoverState.OPENING
 
 
-# This tests needs to be adjusted to remove lingering tasks
-@pytest.mark.parametrize("expected_lingering_tasks", [True])
 @pytest.mark.parametrize(
-    ("fixture", "entity_id"),
+    ("node_fixture", "entity_id"),
     [
-        ("window-covering_lift", "cover.mock_lift_window_covering"),
+        ("mock_window_covering_lift", "cover.mock_lift_window_covering"),
     ],
 )
 async def test_cover_lift_only(
     hass: HomeAssistant,
     matter_client: MagicMock,
-    fixture: str,
+    matter_node: MatterNode,
     entity_id: str,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Test window covering devices with lift feature and without position aware lift feature."""
+    """Test window covering with lift but without position aware lift."""
 
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        fixture,
-        matter_client,
-    )
-
-    set_node_attribute(window_covering, 1, 258, 14, None)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, None)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
     assert state.state == "unknown"
 
-    set_node_attribute(window_covering, 1, 258, 65529, [0, 1, 2])
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 65529, [0, 1, 2])
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
     assert state.attributes["supported_features"] & CoverEntityFeature.SET_POSITION == 0
 
-    set_node_attribute(window_covering, 1, 258, 65529, [0, 1, 2, 5])
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 65529, [0, 1, 2, 5])
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
     assert state.attributes["supported_features"] & CoverEntityFeature.SET_POSITION != 0
 
 
-# This tests needs to be adjusted to remove lingering tasks
-@pytest.mark.parametrize("expected_lingering_tasks", [True])
 @pytest.mark.parametrize(
-    ("fixture", "entity_id"),
+    ("node_fixture", "entity_id"),
     [
-        ("window-covering_pa-lift", "cover.longan_link_wncv_da01"),
+        ("mock_window_covering_pa_lift", "cover.longan_link_wncv_da01"),
     ],
 )
 async def test_cover_position_aware_lift(
     hass: HomeAssistant,
     matter_client: MagicMock,
-    fixture: str,
+    matter_node: MatterNode,
     entity_id: str,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test window covering devices with position aware lift features."""
-
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        fixture,
-        matter_client,
-    )
 
     state = hass.states.get(entity_id)
     assert state
@@ -234,48 +231,107 @@ async def test_cover_position_aware_lift(
     assert state.attributes["supported_features"] & mask == mask
 
     for position in (0, 9999):
-        set_node_attribute(window_covering, 1, 258, 14, position)
-        set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-        await trigger_subscription_callback(hass, matter_client)
+        set_node_attribute(matter_node, 1, 258, 14, position)
+        set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+        await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
         state = hass.states.get(entity_id)
         assert state
         assert state.attributes["current_position"] == 100 - floor(position / 100)
-        assert state.state == STATE_OPEN
+        assert state.state == CoverState.OPEN
 
-    set_node_attribute(window_covering, 1, 258, 14, 10000)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, 10000)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
     assert state.attributes["current_position"] == 0
-    assert state.state == STATE_CLOSED
+    assert state.state == CoverState.CLOSED
 
 
-# This tests needs to be adjusted to remove lingering tasks
-@pytest.mark.parametrize("expected_lingering_tasks", [True])
 @pytest.mark.parametrize(
-    ("fixture", "entity_id"),
+    ("node_fixture", "entity_id"),
     [
-        ("window-covering_tilt", "cover.mock_tilt_window_covering"),
-        ("window-covering_pa-tilt", "cover.mock_pa_tilt_window_covering"),
-        ("window-covering_full", "cover.mock_full_window_covering"),
+        ("mock_window_covering_pa_lift_null_tilt", "cover.shelly_2pm_gen4"),
+    ],
+)
+async def test_cover_position_aware_lift_null_tilt(
+    hass: HomeAssistant,
+    matter_node: MatterNode,
+    entity_id: str,
+) -> None:
+    """Test null tilt attribute while tilt is disabled (Shelly 2PM Gen4).
+
+    See home-assistant/core#149876.
+    """
+    state = hass.states.get(entity_id)
+    assert state
+    assert (
+        state.attributes["supported_features"] & CoverEntityFeature.SET_TILT_POSITION
+        == 0
+    )
+    assert "current_tilt_position" not in state.attributes
+
+
+@pytest.mark.parametrize(
+    ("node_fixture", "entity_id"),
+    [
+        ("mock_window_covering_pa_lift", "cover.longan_link_wncv_da01"),
+    ],
+)
+async def test_cover_split_attribute_updates(
+    hass: HomeAssistant,
+    matter_client: MagicMock,
+    matter_node: MatterNode,
+    entity_id: str,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Test state writes are debounced to coalesce split attribute updates."""
+
+    set_node_attribute(matter_node, 1, 258, 14, 9900)
+    set_node_attribute(matter_node, 1, 258, 10, 0b001010)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
+
+    state = hass.states.get(entity_id)
+    assert state
+    assert state.state == CoverState.CLOSING
+
+    # the device reports it stopped moving, while the final position
+    # arrives as a separate attribute update slightly later
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback(hass, matter_client)
+
+    # the intermittent state (stopped at 1% open) is not written
+    state = hass.states.get(entity_id)
+    assert state
+    assert state.state == CoverState.CLOSING
+
+    set_node_attribute(matter_node, 1, 258, 14, 10000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
+
+    state = hass.states.get(entity_id)
+    assert state
+    assert state.attributes["current_position"] == 0
+    assert state.state == CoverState.CLOSED
+
+
+@pytest.mark.parametrize(
+    ("node_fixture", "entity_id"),
+    [
+        ("mock_window_covering_tilt", "cover.mock_tilt_window_covering"),
+        ("mock_window_covering_pa_tilt", "cover.mock_pa_tilt_window_covering"),
+        ("mock_window_covering_full", "cover.mock_full_window_covering"),
     ],
 )
 async def test_cover_tilt(
     hass: HomeAssistant,
     matter_client: MagicMock,
-    fixture: str,
+    matter_node: MatterNode,
     entity_id: str,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test window covering devices with tilt and position aware tilt features."""
-
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        fixture,
-        matter_client,
-    )
 
     await hass.services.async_call(
         "cover",
@@ -289,52 +345,45 @@ async def test_cover_tilt(
 
     assert matter_client.send_device_command.call_count == 1
     assert matter_client.send_device_command.call_args == call(
-        node_id=window_covering.node_id,
+        node_id=matter_node.node_id,
         endpoint_id=1,
         command=clusters.WindowCovering.Commands.GoToTiltPercentage(5000),
     )
     matter_client.send_device_command.reset_mock()
 
-    await trigger_subscription_callback(hass, matter_client)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
-    set_node_attribute(window_covering, 1, 258, 10, 0b100010)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 10, 0b100010)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_CLOSING
+    assert state.state == CoverState.CLOSING
 
-    set_node_attribute(window_covering, 1, 258, 10, 0b010001)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 10, 0b010001)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_OPENING
+    assert state.state == CoverState.OPENING
 
 
-# This tests needs to be adjusted to remove lingering tasks
-@pytest.mark.parametrize("expected_lingering_tasks", [True])
 @pytest.mark.parametrize(
-    ("fixture", "entity_id"),
+    ("node_fixture", "entity_id"),
     [
-        ("window-covering_tilt", "cover.mock_tilt_window_covering"),
+        ("mock_window_covering_tilt", "cover.mock_tilt_window_covering"),
     ],
 )
 async def test_cover_tilt_only(
     hass: HomeAssistant,
     matter_client: MagicMock,
-    fixture: str,
+    matter_node: MatterNode,
     entity_id: str,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Test window covering devices with tilt feature and without position aware tilt feature."""
+    """Test window covering with tilt but without position aware tilt."""
 
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        fixture,
-        matter_client,
-    )
-
-    set_node_attribute(window_covering, 1, 258, 65529, [0, 1, 2])
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 65529, [0, 1, 2])
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
@@ -343,8 +392,8 @@ async def test_cover_tilt_only(
         == 0
     )
 
-    set_node_attribute(window_covering, 1, 258, 65529, [0, 1, 2, 8])
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 65529, [0, 1, 2, 8])
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
@@ -354,27 +403,20 @@ async def test_cover_tilt_only(
     )
 
 
-# This tests needs to be adjusted to remove lingering tasks
-@pytest.mark.parametrize("expected_lingering_tasks", [True])
 @pytest.mark.parametrize(
-    ("fixture", "entity_id"),
+    ("node_fixture", "entity_id"),
     [
-        ("window-covering_pa-tilt", "cover.mock_pa_tilt_window_covering"),
+        ("mock_window_covering_pa_tilt", "cover.mock_pa_tilt_window_covering"),
     ],
 )
 async def test_cover_position_aware_tilt(
     hass: HomeAssistant,
     matter_client: MagicMock,
-    fixture: str,
+    matter_node: MatterNode,
     entity_id: str,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test window covering devices with position aware tilt feature."""
-
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        fixture,
-        matter_client,
-    )
 
     state = hass.states.get(entity_id)
     assert state
@@ -387,9 +429,9 @@ async def test_cover_position_aware_tilt(
     assert state.attributes["supported_features"] & mask == mask
 
     for tilt_position in (0, 9999, 10000):
-        set_node_attribute(window_covering, 1, 258, 15, tilt_position)
-        set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-        await trigger_subscription_callback(hass, matter_client)
+        set_node_attribute(matter_node, 1, 258, 15, tilt_position)
+        set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+        await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
         state = hass.states.get(entity_id)
         assert state
@@ -398,17 +440,14 @@ async def test_cover_position_aware_tilt(
         )
 
 
+@pytest.mark.parametrize("node_fixture", ["mock_window_covering_full"])
 async def test_cover_full_features(
     hass: HomeAssistant,
     matter_client: MagicMock,
+    matter_node: MatterNode,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test window covering devices with all the features."""
-
-    window_covering = await setup_integration_with_node_fixture(
-        hass,
-        "window-covering_full",
-        matter_client,
-    )
     entity_id = "cover.mock_full_window_covering"
 
     state = hass.states.get(entity_id)
@@ -422,78 +461,78 @@ async def test_cover_full_features(
     )
     assert state.attributes["supported_features"] & mask == mask
 
-    set_node_attribute(window_covering, 1, 258, 14, 10000)
-    set_node_attribute(window_covering, 1, 258, 15, 10000)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, 10000)
+    set_node_attribute(matter_node, 1, 258, 15, 10000)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_CLOSED
+    assert state.state == CoverState.CLOSED
 
-    set_node_attribute(window_covering, 1, 258, 14, 5000)
-    set_node_attribute(window_covering, 1, 258, 15, 10000)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
-
-    state = hass.states.get(entity_id)
-    assert state
-    assert state.state == STATE_OPEN
-
-    set_node_attribute(window_covering, 1, 258, 14, 10000)
-    set_node_attribute(window_covering, 1, 258, 15, 5000)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, 5000)
+    set_node_attribute(matter_node, 1, 258, 15, 10000)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_CLOSED
+    assert state.state == CoverState.OPEN
 
-    set_node_attribute(window_covering, 1, 258, 14, 5000)
-    set_node_attribute(window_covering, 1, 258, 15, 5000)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, 10000)
+    set_node_attribute(matter_node, 1, 258, 15, 5000)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
 
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_OPEN
+    assert state.state == CoverState.CLOSED
 
-    set_node_attribute(window_covering, 1, 258, 14, 5000)
-    set_node_attribute(window_covering, 1, 258, 15, None)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, 5000)
+    set_node_attribute(matter_node, 1, 258, 15, 5000)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
+
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == STATE_OPEN
+    assert state.state == CoverState.OPEN
 
-    set_node_attribute(window_covering, 1, 258, 14, None)
-    set_node_attribute(window_covering, 1, 258, 15, 5000)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, 5000)
+    set_node_attribute(matter_node, 1, 258, 15, None)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
     state = hass.states.get(entity_id)
     assert state
-    assert state.state == "unknown"
+    assert state.state == CoverState.OPEN
 
-    set_node_attribute(window_covering, 1, 258, 14, 10000)
-    set_node_attribute(window_covering, 1, 258, 15, None)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
-    state = hass.states.get(entity_id)
-    assert state
-    assert state.state == STATE_CLOSED
-
-    set_node_attribute(window_covering, 1, 258, 14, None)
-    set_node_attribute(window_covering, 1, 258, 15, 10000)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, None)
+    set_node_attribute(matter_node, 1, 258, 15, 5000)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
     state = hass.states.get(entity_id)
     assert state
     assert state.state == "unknown"
 
-    set_node_attribute(window_covering, 1, 258, 14, None)
-    set_node_attribute(window_covering, 1, 258, 15, None)
-    set_node_attribute(window_covering, 1, 258, 10, 0b000000)
-    await trigger_subscription_callback(hass, matter_client)
+    set_node_attribute(matter_node, 1, 258, 14, 10000)
+    set_node_attribute(matter_node, 1, 258, 15, None)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
+    state = hass.states.get(entity_id)
+    assert state
+    assert state.state == CoverState.CLOSED
+
+    set_node_attribute(matter_node, 1, 258, 14, None)
+    set_node_attribute(matter_node, 1, 258, 15, 10000)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
+    state = hass.states.get(entity_id)
+    assert state
+    assert state.state == "unknown"
+
+    set_node_attribute(matter_node, 1, 258, 14, None)
+    set_node_attribute(matter_node, 1, 258, 15, None)
+    set_node_attribute(matter_node, 1, 258, 10, 0b000000)
+    await trigger_subscription_callback_debounced(hass, freezer, matter_client)
     state = hass.states.get(entity_id)
     assert state
     assert state.state == "unknown"

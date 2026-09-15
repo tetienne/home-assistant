@@ -1,10 +1,11 @@
 """Support for Telldus Live."""
+
 import asyncio
 from functools import partial
 import logging
 
+import probatio
 from tellduslive import DIM, TURNON, UP, Session
-import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
@@ -31,18 +32,20 @@ APPLICATION_NAME = "Home Assistant"
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.Schema(
+        DOMAIN: probatio.Schema(
             {
-                vol.Optional(CONF_HOST, default=DOMAIN): cv.string,
-                vol.Optional(CONF_SCAN_INTERVAL, default=SCAN_INTERVAL): vol.All(
-                    cv.time_period, vol.Clamp(min=MIN_UPDATE_INTERVAL)
+                probatio.Optional(CONF_HOST, default=DOMAIN): cv.string,
+                probatio.Optional(
+                    CONF_SCAN_INTERVAL, default=SCAN_INTERVAL
+                ): probatio.All(
+                    cv.time_period, probatio.Clamp(min=MIN_UPDATE_INTERVAL)
                 ),
             }
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
 DATA_CONFIG_ENTRY_LOCK = "tellduslive_config_entry_lock"
@@ -83,6 +86,8 @@ async def async_new_client(hass, session, entry):
     interval = entry.data[KEY_SCAN_INTERVAL]
     _LOGGER.debug("Update interval %s seconds", interval)
     client = TelldusLiveClient(hass, entry, session, interval)
+    # Uses legacy hass.data[DOMAIN] pattern
+    # pylint: disable-next=home-assistant-use-runtime-data
     hass.data[DOMAIN] = client
     dev_reg = dr.async_get(hass)
     for hub in await client.async_get_hubs():
@@ -179,14 +184,15 @@ class TelldusLiveClient:
         )
         async with self._hass.data[DATA_CONFIG_ENTRY_LOCK]:
             if component not in self._hass.data[CONFIG_ENTRY_IS_SETUP]:
-                await self._hass.config_entries.async_forward_entry_setup(
-                    self._config_entry, component
+                await self._hass.config_entries.async_forward_entry_setups(
+                    self._config_entry, [component]
                 )
                 self._hass.data[CONFIG_ENTRY_IS_SETUP].add(component)
         device_ids = []
         if device.is_sensor:
-            for item in device.items:
-                device_ids.append((device.device_id, item.name, item.scale))
+            device_ids.extend(
+                (device.device_id, item.name, item.scale) for item in device.items
+            )
         else:
             device_ids.append(device_id)
         for _id in device_ids:

@@ -1,15 +1,14 @@
 """Support for interfacing with Monoprice Blackbird 4k 8x8 HDBaseT Matrix."""
-from __future__ import annotations
 
 import logging
-import socket
+from typing import override
 
+import probatio
 from pyblackbird import get_blackbird
-from serial import SerialException
-import voluptuous as vol
+from serialx import SerialException
 
 from homeassistant.components.media_player import (
-    PLATFORM_SCHEMA,
+    PLATFORM_SCHEMA as MEDIA_PLAYER_PLATFORM_SCHEMA,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
@@ -22,7 +21,7 @@ from homeassistant.const import (
     CONF_TYPE,
 )
 from homeassistant.core import HomeAssistant, ServiceCall
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
@@ -30,11 +29,11 @@ from .const import DOMAIN, SERVICE_SETALLZONES
 
 _LOGGER = logging.getLogger(__name__)
 
-MEDIA_PLAYER_SCHEMA = vol.Schema({ATTR_ENTITY_ID: cv.comp_entity_ids})
+MEDIA_PLAYER_SCHEMA = probatio.Schema({ATTR_ENTITY_ID: cv.comp_entity_ids})
 
-ZONE_SCHEMA = vol.Schema({vol.Required(CONF_NAME): cv.string})
+ZONE_SCHEMA = probatio.Schema({probatio.Required(CONF_NAME): cv.string})
 
-SOURCE_SCHEMA = vol.Schema({vol.Required(CONF_NAME): cv.string})
+SOURCE_SCHEMA = probatio.Schema({probatio.Required(CONF_NAME): cv.string})
 
 CONF_ZONES = "zones"
 CONF_SOURCES = "sources"
@@ -44,24 +43,26 @@ DATA_BLACKBIRD = "blackbird"
 ATTR_SOURCE = "source"
 
 BLACKBIRD_SETALLZONES_SCHEMA = MEDIA_PLAYER_SCHEMA.extend(
-    {vol.Required(ATTR_SOURCE): cv.string}
+    {probatio.Required(ATTR_SOURCE): cv.string}
 )
 
 
 # Valid zone ids: 1-8
-ZONE_IDS = vol.All(vol.Coerce(int), vol.Range(min=1, max=8))
+ZONE_IDS = probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=8))
 
 # Valid source ids: 1-8
-SOURCE_IDS = vol.All(vol.Coerce(int), vol.Range(min=1, max=8))
+SOURCE_IDS = probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=8))
 
-PLATFORM_SCHEMA = vol.All(
+PLATFORM_SCHEMA = probatio.All(
     cv.has_at_least_one_key(CONF_PORT, CONF_HOST),
-    PLATFORM_SCHEMA.extend(
+    MEDIA_PLAYER_PLATFORM_SCHEMA.extend(
         {
-            vol.Exclusive(CONF_PORT, CONF_TYPE): cv.string,
-            vol.Exclusive(CONF_HOST, CONF_TYPE): cv.string,
-            vol.Required(CONF_ZONES): vol.Schema({ZONE_IDS: ZONE_SCHEMA}),
-            vol.Required(CONF_SOURCES): vol.Schema({SOURCE_IDS: SOURCE_SCHEMA}),
+            probatio.Exclusive(CONF_PORT, CONF_TYPE): cv.string,
+            probatio.Exclusive(CONF_HOST, CONF_TYPE): cv.string,
+            probatio.Required(CONF_ZONES): probatio.Schema({ZONE_IDS: ZONE_SCHEMA}),
+            probatio.Required(CONF_SOURCES): probatio.Schema(
+                {SOURCE_IDS: SOURCE_SCHEMA}
+            ),
         }
     ),
 )
@@ -93,7 +94,7 @@ def setup_platform(
         try:
             blackbird = get_blackbird(host, False)
             connection = host
-        except socket.timeout:
+        except TimeoutError:
             _LOGGER.error("Error connecting to the Blackbird controller")
             return
 
@@ -103,7 +104,7 @@ def setup_platform(
 
     devices = []
     for zone_id, extra in config[CONF_ZONES].items():
-        _LOGGER.info("Adding zone %d - %s", zone_id, extra[CONF_NAME])
+        _LOGGER.debug("Adding zone %d - %s", zone_id, extra[CONF_NAME])
         unique_id = f"{connection}-{zone_id}"
         device = BlackbirdZone(blackbird, sources, zone_id, extra[CONF_NAME])
         hass.data[DATA_BLACKBIRD][unique_id] = device
@@ -167,6 +168,7 @@ class BlackbirdZone(MediaPlayerEntity):
         self._attr_source = self._source_id_name.get(idx)
 
     @property
+    @override
     def media_title(self):
         """Return the current source as media title."""
         return self.source
@@ -179,6 +181,7 @@ class BlackbirdZone(MediaPlayerEntity):
         _LOGGER.debug("Setting all zones source to %s", idx)
         self._blackbird.set_all_zone_source(idx)
 
+    @override
     def select_source(self, source: str) -> None:
         """Set input source."""
         if source not in self._source_name_id:
@@ -187,11 +190,13 @@ class BlackbirdZone(MediaPlayerEntity):
         _LOGGER.debug("Setting zone %d source to %s", self._zone_id, idx)
         self._blackbird.set_zone_source(self._zone_id, idx)
 
+    @override
     def turn_on(self) -> None:
         """Turn the media player on."""
         _LOGGER.debug("Turning zone %d on", self._zone_id)
         self._blackbird.set_zone_power(self._zone_id, True)
 
+    @override
     def turn_off(self) -> None:
         """Turn the media player off."""
         _LOGGER.debug("Turning zone %d off", self._zone_id)

@@ -1,5 +1,4 @@
 """Support for LaMetric time services."""
-from __future__ import annotations
 
 from demetriek import (
     AlarmSound,
@@ -14,12 +13,13 @@ from demetriek import (
     Simple,
     Sound,
 )
-import voluptuous as vol
+import probatio
 
 from homeassistant.const import CONF_DEVICE_ID, CONF_ICON
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util.enum import try_parse_enum
 
 from .const import (
     CONF_CYCLES,
@@ -35,32 +35,34 @@ from .const import (
 from .coordinator import LaMetricDataUpdateCoordinator
 from .helpers import async_get_coordinator_by_device_id
 
-SERVICE_BASE_SCHEMA = vol.Schema(
+SERVICE_BASE_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_DEVICE_ID): cv.string,
-        vol.Optional(CONF_CYCLES, default=1): cv.positive_int,
-        vol.Optional(CONF_ICON_TYPE, default=NotificationIconType.NONE): vol.Coerce(
-            NotificationIconType
-        ),
-        vol.Optional(CONF_PRIORITY, default=NotificationPriority.INFO): vol.Coerce(
-            NotificationPriority
-        ),
-        vol.Optional(CONF_SOUND): vol.Any(
-            vol.Coerce(AlarmSound), vol.Coerce(NotificationSound)
+        probatio.Required(CONF_DEVICE_ID): cv.string,
+        probatio.Optional(CONF_CYCLES, default=1): cv.positive_int,
+        probatio.Optional(
+            CONF_ICON_TYPE, default=NotificationIconType.NONE
+        ): probatio.Coerce(NotificationIconType),
+        probatio.Optional(
+            CONF_PRIORITY, default=NotificationPriority.INFO
+        ): probatio.Coerce(NotificationPriority),
+        probatio.Optional(CONF_SOUND): probatio.Any(
+            probatio.Coerce(AlarmSound), probatio.Coerce(NotificationSound)
         ),
     }
 )
 
 SERVICE_MESSAGE_SCHEMA = SERVICE_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_MESSAGE): cv.string,
-        vol.Optional(CONF_ICON): cv.string,
+        probatio.Required(CONF_MESSAGE): cv.string,
+        probatio.Optional(CONF_ICON): cv.string,
     }
 )
 
 SERVICE_CHART_SCHEMA = SERVICE_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_DATA): vol.All(cv.ensure_list, [vol.Coerce(int)]),
+        probatio.Required(CONF_DATA): probatio.All(
+            cv.ensure_list, [probatio.Coerce(int)]
+        ),
     }
 )
 
@@ -106,6 +108,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_MESSAGE,
         _async_service_message,
         schema=SERVICE_MESSAGE_SCHEMA,
+        description_placeholders={"icons_url": "https://developer.lametric.com/icons"},
     )
 
 
@@ -117,7 +120,12 @@ async def async_send_notification(
     """Send a notification to an LaMetric device."""
     sound = None
     if CONF_SOUND in call.data:
-        sound = Sound(sound=call.data[CONF_SOUND], category=None)
+        snd: AlarmSound | NotificationSound | None
+        if (snd := try_parse_enum(AlarmSound, call.data[CONF_SOUND])) is None and (
+            snd := try_parse_enum(NotificationSound, call.data[CONF_SOUND])
+        ) is None:
+            raise ServiceValidationError("Unknown sound provided")
+        sound = Sound(sound=snd, category=None)
 
     notification = Notification(
         icon_type=NotificationIconType(call.data[CONF_ICON_TYPE]),

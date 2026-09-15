@@ -1,9 +1,8 @@
 """The motionEye integration."""
-from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import suppress
-from types import MappingProxyType
-from typing import Any
+from typing import Any, override
 
 import aiohttp
 from jinja2 import Template
@@ -12,7 +11,6 @@ from motioneye_client.const import (
     DEFAULT_SURVEILLANCE_USERNAME,
     KEY_ACTION_SNAPSHOT,
     KEY_MOTION_DETECTION,
-    KEY_NAME,
     KEY_STREAMING_AUTH_MODE,
     KEY_TEXT_OVERLAY_CAMERA_NAME,
     KEY_TEXT_OVERLAY_CUSTOM_TEXT,
@@ -23,15 +21,15 @@ from motioneye_client.const import (
     KEY_TEXT_OVERLAY_RIGHT,
     KEY_TEXT_OVERLAY_TIMESTAMP,
 )
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.mjpeg import (
     CONF_MJPEG_URL,
     CONF_STILL_IMAGE_URL,
     MjpegCamera,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    CONF_ACTION,
     CONF_AUTHENTICATION,
     CONF_NAME,
     CONF_PASSWORD,
@@ -42,33 +40,25 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, entity_platform
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import (
-    MotionEyeEntity,
-    get_camera_from_cameras,
-    is_acceptable_camera,
-    listen_for_new_cameras,
-)
+from . import get_camera_from_cameras, is_acceptable_camera, listen_for_new_cameras
 from .const import (
-    CONF_ACTION,
-    CONF_CLIENT,
-    CONF_COORDINATOR,
     CONF_STREAM_URL_TEMPLATE,
     CONF_SURVEILLANCE_PASSWORD,
     CONF_SURVEILLANCE_USERNAME,
-    DOMAIN,
     MOTIONEYE_MANUFACTURER,
     SERVICE_ACTION,
     SERVICE_SET_TEXT_OVERLAY,
     SERVICE_SNAPSHOT,
     TYPE_MOTIONEYE_MJPEG_CAMERA,
 )
+from .coordinator import MotionEyeConfigEntry, MotionEyeUpdateCoordinator
+from .entity import MotionEyeEntity
 
 PLATFORMS = [Platform.CAMERA]
 
-SCHEMA_TEXT_OVERLAY = vol.In(
+SCHEMA_TEXT_OVERLAY = probatio.In(
     [
         KEY_TEXT_OVERLAY_DISABLED,
         KEY_TEXT_OVERLAY_TIMESTAMP,
@@ -76,14 +66,14 @@ SCHEMA_TEXT_OVERLAY = vol.In(
         KEY_TEXT_OVERLAY_CAMERA_NAME,
     ]
 )
-SCHEMA_SERVICE_SET_TEXT = vol.Schema(
-    vol.All(
+SCHEMA_SERVICE_SET_TEXT = probatio.Schema(
+    probatio.All(
         cv.make_entity_service_schema(
             {
-                vol.Optional(KEY_TEXT_OVERLAY_LEFT): SCHEMA_TEXT_OVERLAY,
-                vol.Optional(KEY_TEXT_OVERLAY_CUSTOM_TEXT_LEFT): cv.string,
-                vol.Optional(KEY_TEXT_OVERLAY_RIGHT): SCHEMA_TEXT_OVERLAY,
-                vol.Optional(KEY_TEXT_OVERLAY_CUSTOM_TEXT_RIGHT): cv.string,
+                probatio.Optional(KEY_TEXT_OVERLAY_LEFT): SCHEMA_TEXT_OVERLAY,
+                probatio.Optional(KEY_TEXT_OVERLAY_CUSTOM_TEXT_LEFT): cv.string,
+                probatio.Optional(KEY_TEXT_OVERLAY_RIGHT): SCHEMA_TEXT_OVERLAY,
+                probatio.Optional(KEY_TEXT_OVERLAY_CUSTOM_TEXT_RIGHT): cv.string,
             },
         ),
         cv.has_at_least_one_key(
@@ -97,10 +87,12 @@ SCHEMA_SERVICE_SET_TEXT = vol.Schema(
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: MotionEyeConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up motionEye from a config entry."""
-    entry_data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     @callback
     def camera_add(camera: dict[str, Any]) -> None:
@@ -114,8 +106,8 @@ async def async_setup_entry(
                     ),
                     entry.data.get(CONF_SURVEILLANCE_PASSWORD, ""),
                     camera,
-                    entry_data[CONF_CLIENT],
-                    entry_data[CONF_COORDINATOR],
+                    coordinator.client,
+                    coordinator,
                     entry.options,
                 )
             ]
@@ -131,12 +123,12 @@ async def async_setup_entry(
     )
     platform.async_register_entity_service(
         SERVICE_ACTION,
-        {vol.Required(CONF_ACTION): cv.string},
+        {probatio.Required(CONF_ACTION): cv.string},
         "async_request_action",
     )
     platform.async_register_entity_service(
         SERVICE_SNAPSHOT,
-        {},
+        None,
         "async_request_snapshot",
     )
 
@@ -144,7 +136,9 @@ async def async_setup_entry(
 class MotionEyeMjpegCamera(MotionEyeEntity, MjpegCamera):
     """motionEye mjpeg camera."""
 
-    _name: str
+    _attr_brand = MOTIONEYE_MANUFACTURER
+    # motionEye cameras are always streaming or unavailable.
+    _attr_is_streaming = True
 
     def __init__(
         self,
@@ -153,16 +147,13 @@ class MotionEyeMjpegCamera(MotionEyeEntity, MjpegCamera):
         password: str,
         camera: dict[str, Any],
         client: MotionEyeClient,
-        coordinator: DataUpdateCoordinator,
-        options: MappingProxyType[str, str],
+        coordinator: MotionEyeUpdateCoordinator,
+        options: Mapping[str, str],
     ) -> None:
         """Initialize a MJPEG camera."""
         self._surveillance_username = username
         self._surveillance_password = password
         self._motion_detection_enabled: bool = camera.get(KEY_MOTION_DETECTION, False)
-
-        # motionEye cameras are always streaming or unavailable.
-        self._attr_is_streaming = True
 
         MotionEyeEntity.__init__(
             self,
@@ -203,7 +194,7 @@ class MotionEyeMjpegCamera(MotionEyeEntity, MjpegCamera):
                 streaming_url = self._client.get_camera_stream_url(camera)
 
         return {
-            CONF_NAME: camera[KEY_NAME],
+            CONF_NAME: None,
             CONF_USERNAME: self._surveillance_username if auth is not None else None,
             CONF_PASSWORD: self._surveillance_password if auth is not None else "",
             CONF_MJPEG_URL: streaming_url or "",
@@ -218,7 +209,6 @@ class MotionEyeMjpegCamera(MotionEyeEntity, MjpegCamera):
         # Sets the state of the underlying (inherited) MjpegCamera based on the updated
         # MotionEye camera dictionary.
         properties = self._get_mjpeg_camera_properties_for_camera(camera)
-        self._name = properties[CONF_NAME]
         self._username = properties[CONF_USERNAME]
         self._password = properties[CONF_PASSWORD]
         self._mjpeg_url = properties[CONF_MJPEG_URL]
@@ -229,7 +219,11 @@ class MotionEyeMjpegCamera(MotionEyeEntity, MjpegCamera):
             self._authentication == HTTP_BASIC_AUTHENTICATION
             and self._username is not None
         ):
-            self._auth = aiohttp.BasicAuth(self._username, password=self._password)
+            self._auth_headers = {
+                "Authorization": aiohttp.encode_basic_auth(
+                    self._username, self._password
+                )
+            }
 
     def _is_acceptable_streaming_camera(self) -> bool:
         """Determine if a camera is streaming/usable."""
@@ -238,11 +232,13 @@ class MotionEyeMjpegCamera(MotionEyeEntity, MjpegCamera):
         ) and MotionEyeClient.is_camera_streaming(self._camera)
 
     @property
+    @override
     def available(self) -> bool:
         """Return if entity is available."""
         return super().available and self._is_acceptable_streaming_camera()
 
     @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self._camera = get_camera_from_cameras(self._camera_id, self.coordinator.data)
@@ -254,11 +250,7 @@ class MotionEyeMjpegCamera(MotionEyeEntity, MjpegCamera):
         super()._handle_coordinator_update()
 
     @property
-    def brand(self) -> str:
-        """Return the camera brand."""
-        return MOTIONEYE_MANUFACTURER
-
-    @property
+    @override
     def motion_detection_enabled(self) -> bool:
         """Return the camera motion detection status."""
         return self._motion_detection_enabled

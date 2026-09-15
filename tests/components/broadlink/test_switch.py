@@ -1,4 +1,5 @@
 """Tests for Broadlink switches."""
+
 from homeassistant.components.broadlink.const import DOMAIN
 from homeassistant.components.switch import (
     DOMAIN as SWITCH_DOMAIN,
@@ -21,8 +22,8 @@ async def test_switch_setup_works(
     device = get_device("Dining room")
     mock_setup = await device.setup_entry(hass)
 
-    device_entry = device_registry.async_get_device(
-        {(DOMAIN, mock_setup.entry.unique_id)}
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, mock_setup.entry.unique_id), mock_setup.entry.entry_id
     )
     entries = er.async_entries_for_device(entity_registry, device_entry.id)
     switches = [entry for entry in entries if entry.domain == Platform.SWITCH]
@@ -45,8 +46,8 @@ async def test_switch_turn_off_turn_on(
     device = get_device("Dining room")
     mock_setup = await device.setup_entry(hass)
 
-    device_entry = device_registry.async_get_device(
-        {(DOMAIN, mock_setup.entry.unique_id)}
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, mock_setup.entry.unique_id), mock_setup.entry.entry_id
     )
     entries = er.async_entries_for_device(entity_registry, device_entry.id)
     switches = [entry for entry in entries if entry.domain == Platform.SWITCH]
@@ -81,8 +82,8 @@ async def test_slots_switch_setup_works(
     device = get_device("Gaming room")
     mock_setup = await device.setup_entry(hass)
 
-    device_entry = device_registry.async_get_device(
-        {(DOMAIN, mock_setup.entry.unique_id)}
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, mock_setup.entry.unique_id), mock_setup.entry.entry_id
     )
     entries = er.async_entries_for_device(entity_registry, device_entry.id)
     switches = [entry for entry in entries if entry.domain == Platform.SWITCH]
@@ -91,7 +92,7 @@ async def test_slots_switch_setup_works(
     for slot, switch in enumerate(switches):
         assert (
             hass.states.get(switch.entity_id).attributes[ATTR_FRIENDLY_NAME]
-            == f"{device.name} S{slot+1}"
+            == f"{device.name} S{slot + 1}"
         )
         assert hass.states.get(switch.entity_id).state == STATE_OFF
         assert mock_setup.api.auth.call_count == 1
@@ -106,8 +107,8 @@ async def test_slots_switch_turn_off_turn_on(
     device = get_device("Gaming room")
     mock_setup = await device.setup_entry(hass)
 
-    device_entry = device_registry.async_get_device(
-        {(DOMAIN, mock_setup.entry.unique_id)}
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, mock_setup.entry.unique_id), mock_setup.entry.entry_id
     )
     entries = er.async_entries_for_device(entity_registry, device_entry.id)
     switches = [entry for entry in entries if entry.domain == Platform.SWITCH]

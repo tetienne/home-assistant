@@ -1,16 +1,23 @@
 """Offer state listening automation rules."""
-from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 import logging
 
-import voluptuous as vol
+import probatio
 
 from homeassistant import exceptions
-from homeassistant.const import CONF_ATTRIBUTE, CONF_FOR, CONF_PLATFORM, MATCH_ALL
+from homeassistant.const import (
+    CONF_ATTRIBUTE,
+    CONF_ENTITY_ID,
+    CONF_FOR,
+    CONF_PLATFORM,
+    MATCH_ALL,
+)
 from homeassistant.core import (
     CALLBACK_TYPE,
     Event,
+    EventStateChangedData,
     HassJob,
     HomeAssistant,
     State,
@@ -31,7 +38,6 @@ from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
 
-CONF_ENTITY_ID = "entity_id"
 CONF_FROM = "from"
 CONF_TO = "to"
 CONF_NOT_FROM = "not_from"
@@ -39,29 +45,29 @@ CONF_NOT_TO = "not_to"
 
 BASE_SCHEMA = cv.TRIGGER_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_PLATFORM): "state",
-        vol.Required(CONF_ENTITY_ID): cv.entity_ids_or_uuids,
-        vol.Optional(CONF_FOR): cv.positive_time_period_template,
-        vol.Optional(CONF_ATTRIBUTE): cv.match_all,
+        probatio.Required(CONF_PLATFORM): "state",
+        probatio.Required(CONF_ENTITY_ID): cv.entity_ids_or_uuids,
+        probatio.Optional(CONF_FOR): cv.positive_time_period_template,
+        probatio.Optional(CONF_ATTRIBUTE): cv.match_all,
     }
 )
 
 TRIGGER_STATE_SCHEMA = BASE_SCHEMA.extend(
     {
         # These are str on purpose. Want to catch YAML conversions
-        vol.Exclusive(CONF_FROM, CONF_FROM): vol.Any(str, [str], None),
-        vol.Exclusive(CONF_NOT_FROM, CONF_FROM): vol.Any(str, [str], None),
-        vol.Exclusive(CONF_TO, CONF_TO): vol.Any(str, [str], None),
-        vol.Exclusive(CONF_NOT_TO, CONF_TO): vol.Any(str, [str], None),
+        probatio.Exclusive(CONF_FROM, CONF_FROM): probatio.Any(str, [str], None),
+        probatio.Exclusive(CONF_NOT_FROM, CONF_FROM): probatio.Any(str, [str], None),
+        probatio.Exclusive(CONF_TO, CONF_TO): probatio.Any(str, [str], None),
+        probatio.Exclusive(CONF_NOT_TO, CONF_TO): probatio.Any(str, [str], None),
     }
 )
 
 TRIGGER_ATTRIBUTE_SCHEMA = BASE_SCHEMA.extend(
     {
-        vol.Exclusive(CONF_FROM, CONF_FROM): cv.match_all,
-        vol.Exclusive(CONF_NOT_FROM, CONF_FROM): cv.match_all,
-        vol.Exclusive(CONF_TO, CONF_TO): cv.match_all,
-        vol.Exclusive(CONF_NOT_TO, CONF_TO): cv.match_all,
+        probatio.Exclusive(CONF_FROM, CONF_FROM): cv.match_all,
+        probatio.Exclusive(CONF_NOT_FROM, CONF_FROM): cv.match_all,
+        probatio.Exclusive(CONF_TO, CONF_TO): cv.match_all,
+        probatio.Exclusive(CONF_NOT_TO, CONF_TO): cv.match_all,
     }
 )
 
@@ -71,9 +77,9 @@ async def async_validate_trigger_config(
 ) -> ConfigType:
     """Validate trigger config."""
     if not isinstance(config, dict):
-        raise vol.Invalid("Expected a dictionary")
+        raise probatio.Invalid("Expected a dictionary")
 
-    # We use this approach instead of vol.Any because
+    # We use this approach instead of probatio.Any because
     # this gives better error messages.
     if CONF_ATTRIBUTE in config:
         config = TRIGGER_ATTRIBUTE_SCHEMA(config)
@@ -114,13 +120,12 @@ async def async_attach_trigger(
         match_to_state = process_state_match(MATCH_ALL)
 
     time_delta = config.get(CONF_FOR)
-    template.attach(hass, time_delta)
     # If neither CONF_FROM or CONF_TO are specified,
     # fire on all changes to the state or an attribute
     match_all = all(
         item not in config for item in (CONF_FROM, CONF_NOT_FROM, CONF_NOT_TO, CONF_TO)
     )
-    unsub_track_same = {}
+    unsub_track_same: dict[str, Callable[[], None]] = {}
     period: dict[str, timedelta] = {}
     attribute = config.get(CONF_ATTRIBUTE)
     job = HassJob(action, f"state trigger {trigger_info}")
@@ -129,11 +134,11 @@ async def async_attach_trigger(
     _variables = trigger_info["variables"] or {}
 
     @callback
-    def state_automation_listener(event: Event):
+    def state_automation_listener(event: Event[EventStateChangedData]) -> None:
         """Listen for state changes and calls action."""
-        entity: str = event.data["entity_id"]
-        from_s: State | None = event.data.get("old_state")
-        to_s: State | None = event.data.get("new_state")
+        entity = event.data["entity_id"]
+        from_s = event.data["old_state"]
+        to_s = event.data["new_state"]
 
         if from_s is None:
             old_value = None
@@ -164,7 +169,7 @@ async def async_attach_trigger(
             return
 
         @callback
-        def call_action():
+        def call_action() -> None:
             """Call action with right context."""
             hass.async_run_hass_job(
                 job,
@@ -201,13 +206,13 @@ async def async_attach_trigger(
             period[entity] = cv.positive_time_period(
                 template.render_complex(time_delta, variables)
             )
-        except (exceptions.TemplateError, vol.Invalid) as ex:
+        except (exceptions.TemplateError, probatio.Invalid) as ex:
             _LOGGER.error(
                 "Error rendering '%s' for template: %s", trigger_info["name"], ex
             )
             return
 
-        def _check_same_state(_, _2, new_st: State | None) -> bool:
+        def _check_same_state(_: str, _2: State | None, new_st: State | None) -> bool:
             if new_st is None:
                 return False
 
@@ -233,7 +238,7 @@ async def async_attach_trigger(
     unsub = async_track_state_change_event(hass, entity_ids, state_automation_listener)
 
     @callback
-    def async_remove():
+    def async_remove() -> None:
         """Remove state listeners async."""
         unsub()
         for async_remove in unsub_track_same.values():

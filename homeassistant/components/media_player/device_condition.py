@@ -1,7 +1,6 @@
 """Provides device automations for Media player."""
-from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -39,8 +38,8 @@ CONDITION_TYPES = {
 
 CONDITION_SCHEMA = DEVICE_CONDITION_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_ENTITY_ID): cv.entity_id,
-        vol.Required(CONF_TYPE): vol.In(CONDITION_TYPES),
+        probatio.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
+        probatio.Required(CONF_TYPE): probatio.In(CONDITION_TYPES),
     }
 )
 
@@ -62,7 +61,7 @@ async def async_get_conditions(
             CONF_CONDITION: "device",
             CONF_DEVICE_ID: device_id,
             CONF_DOMAIN: DOMAIN,
-            CONF_ENTITY_ID: entry.entity_id,
+            CONF_ENTITY_ID: entry.id,
         }
 
         conditions += [{**base_condition, CONF_TYPE: cond} for cond in CONDITION_TYPES]
@@ -88,8 +87,11 @@ def async_condition_from_config(
     else:  # is_playing
         state = STATE_PLAYING
 
+    registry = er.async_get(hass)
+    entity_id = er.async_resolve_entity_id(registry, config[ATTR_ENTITY_ID])
+
     def test_is_state(hass: HomeAssistant, variables: TemplateVarsType) -> bool:
         """Test if an entity is a certain state."""
-        return condition.state(hass, config[ATTR_ENTITY_ID], state)
+        return condition.state(hass, entity_id, state)
 
     return test_is_state

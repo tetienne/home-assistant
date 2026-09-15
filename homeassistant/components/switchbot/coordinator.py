@@ -1,12 +1,10 @@
 """Provides the switchbot DataUpdateCoordinator."""
-from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
-import async_timeout
 import switchbot
 from switchbot import SwitchbotModel
 
@@ -14,6 +12,7 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.active_update_coordinator import (
     ActiveBluetoothDataUpdateCoordinator,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant, callback
 
 if TYPE_CHECKING:
@@ -23,6 +22,8 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 DEVICE_STARTUP_TIMEOUT = 30
+
+type SwitchbotConfigEntry = ConfigEntry[SwitchbotDataUpdateCoordinator]
 
 
 class SwitchbotDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
@@ -38,6 +39,7 @@ class SwitchbotDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         device_name: str,
         connectable: bool,
         model: SwitchbotModel,
+        config_entry: ConfigEntry,
     ) -> None:
         """Initialize global switchbot data updater."""
         super().__init__(
@@ -54,6 +56,7 @@ class SwitchbotDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self.device_name = device_name
         self.base_unique_id = base_unique_id
         self.model = model
+        self.config_entry = config_entry
         self._ready_event = asyncio.Event()
         self._was_unavailable = True
 
@@ -66,7 +69,8 @@ class SwitchbotDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         # Only poll if hass is running, we need to poll,
         # and we actually have a way to connect to the device
         return (
-            self.hass.state == CoreState.running
+            self.hass.state is CoreState.running
+            and self.connectable
             and self.device.poll_needed(seconds_since_last_poll)
             and bool(
                 bluetooth.async_ble_device_from_address(
@@ -82,14 +86,17 @@ class SwitchbotDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         await self.device.update()
 
     @callback
+    @override
     def _async_handle_unavailable(
         self, service_info: bluetooth.BluetoothServiceInfoBleak
     ) -> None:
         """Handle the device going unavailable."""
         super()._async_handle_unavailable(service_info)
         self._was_unavailable = True
+        _LOGGER.info("Device %s is unavailable", self.device_name)
 
     @callback
+    @override
     def _async_handle_bluetooth_event(
         self,
         service_info: bluetooth.BluetoothServiceInfoBleak,
@@ -111,13 +118,14 @@ class SwitchbotDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         if not self.device.advertisement_changed(adv) and not self._was_unavailable:
             return
         self._was_unavailable = False
+        _LOGGER.info("Device %s is online", self.device_name)
         self.device.update_from_advertisement(adv)
         super()._async_handle_bluetooth_event(service_info, change)
 
     async def async_wait_ready(self) -> bool:
         """Wait for the device to be ready."""
-        with contextlib.suppress(asyncio.TimeoutError):
-            async with async_timeout.timeout(DEVICE_STARTUP_TIMEOUT):
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(DEVICE_STARTUP_TIMEOUT):
                 await self._ready_event.wait()
                 return True
         return False

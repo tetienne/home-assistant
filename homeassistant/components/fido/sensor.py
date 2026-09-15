@@ -3,17 +3,17 @@
 Get data from 'Usage Summary' page:
 https://www.fido.ca/pages/#/my-account/wireless
 """
-from __future__ import annotations
 
 from datetime import timedelta
 import logging
+from typing import Any, override
 
+import probatio
 from pyfido import FidoClient
 from pyfido.client import PyFidoError
-import voluptuous as vol
 
 from homeassistant.components.sensor import (
-    PLATFORM_SCHEMA,
+    PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
@@ -27,8 +27,8 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import Throttle
@@ -171,14 +171,14 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
 
 SENSOR_KEYS: list[str] = [desc.key for desc in SENSOR_TYPES]
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
     {
-        vol.Required(CONF_MONITORED_VARIABLES): vol.All(
-            cv.ensure_list, [vol.In(SENSOR_KEYS)]
+        probatio.Required(CONF_MONITORED_VARIABLES): probatio.All(
+            cv.ensure_list, [probatio.In(SENSOR_KEYS)]
         ),
-        vol.Required(CONF_USERNAME): cv.string,
-        vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+        probatio.Required(CONF_USERNAME): cv.string,
+        probatio.Required(CONF_PASSWORD): cv.string,
+        probatio.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
     }
 )
 
@@ -225,7 +225,8 @@ class FidoSensor(SensorEntity):
         self._attr_name = f"{name} {number} {description.name}"
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the sensor."""
         return {"number": self._number}
 
@@ -235,11 +236,10 @@ class FidoSensor(SensorEntity):
         if (sensor_type := self.entity_description.key) == "balance":
             if self.fido_data.data.get(sensor_type) is not None:
                 self._attr_native_value = round(self.fido_data.data[sensor_type], 2)
-        else:
-            if self.fido_data.data.get(self._number, {}).get(sensor_type) is not None:
-                self._attr_native_value = round(
-                    self.fido_data.data[self._number][sensor_type], 2
-                )
+        elif self.fido_data.data.get(self._number, {}).get(sensor_type) is not None:
+            self._attr_native_value = round(
+                self.fido_data.data[self._number][sensor_type], 2
+            )
 
 
 class FidoData:

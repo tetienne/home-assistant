@@ -1,19 +1,20 @@
 """Component providing basic support for Foscam IP cameras."""
-from __future__ import annotations
 
 import asyncio
+from typing import override
+from urllib.parse import quote
 
-from libpyfoscam import FoscamCamera
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv, entity_platform
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import CONF_RTSP_PORT, CONF_STREAM, LOGGER, SERVICE_PTZ, SERVICE_PTZ_PRESET
+from .coordinator import FoscamConfigEntry, FoscamCoordinator
+from .entity import FoscamEntity
 
 DIR_UP = "up"
 DIR_DOWN = "down"
@@ -47,15 +48,15 @@ PTZ_GOTO_PRESET_COMMAND = "ptz_goto_preset"
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: FoscamConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Add a Foscam IP camera from a config entry."""
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service(
         SERVICE_PTZ,
         {
-            vol.Required(ATTR_MOVEMENT): vol.In(
+            probatio.Required(ATTR_MOVEMENT): probatio.In(
                 [
                     DIR_UP,
                     DIR_DOWN,
@@ -67,7 +68,9 @@ async def async_setup_entry(
                     DIR_BOTTOMRIGHT,
                 ]
             ),
-            vol.Optional(ATTR_TRAVELTIME, default=DEFAULT_TRAVELTIME): cv.small_float,
+            probatio.Optional(
+                ATTR_TRAVELTIME, default=DEFAULT_TRAVELTIME
+            ): cv.small_float,
         },
         "async_perform_ptz",
     )
@@ -75,31 +78,32 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_PTZ_PRESET,
         {
-            vol.Required(ATTR_PRESET_NAME): cv.string,
+            probatio.Required(ATTR_PRESET_NAME): cv.string,
         },
         "async_perform_ptz_preset",
     )
 
-    camera = FoscamCamera(
-        config_entry.data[CONF_HOST],
-        config_entry.data[CONF_PORT],
-        config_entry.data[CONF_USERNAME],
-        config_entry.data[CONF_PASSWORD],
-        verbose=False,
-    )
+    coordinator = config_entry.runtime_data
 
-    async_add_entities([HassFoscamCamera(camera, config_entry)])
+    async_add_entities([HassFoscamCamera(coordinator, config_entry)])
 
 
-class HassFoscamCamera(Camera):
+class HassFoscamCamera(FoscamEntity, Camera):
     """An implementation of a Foscam IP camera."""
 
-    def __init__(self, camera: FoscamCamera, config_entry: ConfigEntry) -> None:
-        """Initialize a Foscam camera."""
-        super().__init__()
+    _attr_has_entity_name = True
+    _attr_name = None
 
-        self._foscam_session = camera
-        self._attr_name = config_entry.title
+    def __init__(
+        self,
+        coordinator: FoscamCoordinator,
+        config_entry: FoscamConfigEntry,
+    ) -> None:
+        """Initialize a Foscam camera."""
+        super().__init__(coordinator, config_entry.entry_id)
+        Camera.__init__(self)
+
+        self._foscam_session = coordinator.session
         self._username = config_entry.data[CONF_USERNAME]
         self._password = config_entry.data[CONF_PASSWORD]
         self._stream = config_entry.data[CONF_STREAM]
@@ -108,15 +112,19 @@ class HassFoscamCamera(Camera):
         if self._rtsp_port:
             self._attr_supported_features = CameraEntityFeature.STREAM
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity addition to hass."""
         # Get motion detection status
+
+        await super().async_added_to_hass()
+
         ret, response = await self.hass.async_add_executor_job(
             self._foscam_session.get_motion_detect_config
         )
 
         if ret == -3:
-            LOGGER.info(
+            LOGGER.warning(
                 (
                     "Can't get motion detection status, camera %s configured with"
                     " non-admin user"
@@ -132,6 +140,7 @@ class HassFoscamCamera(Camera):
         else:
             self._attr_motion_detection_enabled = response == 1
 
+    @override
     def camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
@@ -144,13 +153,17 @@ class HassFoscamCamera(Camera):
 
         return response
 
+    @override
     async def stream_source(self) -> str | None:
         """Return the stream source."""
         if self._rtsp_port:
-            return f"rtsp://{self._username}:{self._password}@{self._foscam_session.host}:{self._rtsp_port}/video{self._stream}"
+            _username = quote(self._username)
+            _password = quote(self._password)
+            return f"rtsp://{_username}:{_password}@{self._foscam_session.host}:{self._rtsp_port}/video{self._stream}"
 
         return None
 
+    @override
     def enable_motion_detection(self) -> None:
         """Enable motion detection in camera."""
         try:
@@ -158,7 +171,7 @@ class HassFoscamCamera(Camera):
 
             if ret != 0:
                 if ret == -3:
-                    LOGGER.info(
+                    LOGGER.warning(
                         (
                             "Can't set motion detection status, camera %s configured"
                             " with non-admin user"
@@ -177,6 +190,7 @@ class HassFoscamCamera(Camera):
                 self.name,
             )
 
+    @override
     def disable_motion_detection(self) -> None:
         """Disable motion detection."""
         try:
@@ -184,7 +198,7 @@ class HassFoscamCamera(Camera):
 
             if ret != 0:
                 if ret == -3:
-                    LOGGER.info(
+                    LOGGER.warning(
                         (
                             "Can't set motion detection status, camera %s configured"
                             " with non-admin user"

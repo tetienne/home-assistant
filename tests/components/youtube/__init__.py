@@ -1,91 +1,103 @@
 """Tests for the YouTube integration."""
-from dataclasses import dataclass
-import json
-from typing import Any
 
-from tests.common import load_fixture
+import asyncio
+from collections.abc import AsyncGenerator
 
+from youtubeaio.models import YouTubeChannel, YouTubePlaylistItem, YouTubeSubscription
+from youtubeaio.types import AuthScope
 
-@dataclass
-class MockRequest:
-    """Mock object for a request."""
+from homeassistant.components.youtube.const import DOMAIN
+from homeassistant.core import HomeAssistant
 
-    fixture: str
-
-    def execute(self) -> dict[str, Any]:
-        """Return a fixture."""
-        return json.loads(load_fixture(self.fixture))
+from tests.common import async_load_json_object_fixture
 
 
-class MockChannels:
-    """Mock object for channels."""
-
-    def __init__(self, fixture: str):
-        """Initialize mock channels."""
-        self._fixture = fixture
-
-    def list(
-        self,
-        part: str,
-        id: str | None = None,
-        mine: bool | None = None,
-        maxResults: int | None = None,
-    ) -> MockRequest:
-        """Return a fixture."""
-        return MockRequest(fixture=self._fixture)
-
-
-class MockPlaylistItems:
-    """Mock object for playlist items."""
-
-    def __init__(self, fixture: str):
-        """Initialize mock playlist items."""
-        self._fixture = fixture
-
-    def list(
-        self,
-        part: str,
-        playlistId: str,
-        maxResults: int | None = None,
-    ) -> MockRequest:
-        """Return a fixture."""
-        return MockRequest(fixture=self._fixture)
-
-
-class MockSubscriptions:
-    """Mock object for subscriptions."""
-
-    def __init__(self, fixture: str):
-        """Initialize mock subscriptions."""
-        self._fixture = fixture
-
-    def list(self, part: str, mine: bool, maxResults: int | None = None) -> MockRequest:
-        """Return a fixture."""
-        return MockRequest(fixture=self._fixture)
-
-
-class MockService:
+class MockYouTube:
     """Service which returns mock objects."""
+
+    _thrown_error: Exception | None = None
 
     def __init__(
         self,
-        channel_fixture: str = "youtube/get_channel.json",
-        playlist_items_fixture: str = "youtube/get_playlist_items.json",
-        subscriptions_fixture: str = "youtube/get_subscriptions.json",
-    ):
+        hass: HomeAssistant,
+        channel_fixture: str = "get_channel.json",
+        playlist_items_fixture: str = "get_playlist_items.json",
+        subscriptions_fixture: str = "get_subscriptions.json",
+        short_video_ids: set[str] | None = None,
+        short_check_delay: float = 0.0,
+    ) -> None:
         """Initialize mock service."""
+        self.hass = hass
         self._channel_fixture = channel_fixture
         self._playlist_items_fixture = playlist_items_fixture
         self._subscriptions_fixture = subscriptions_fixture
+        self._short_video_ids: set[str] = short_video_ids or set()
+        self._short_check_delay = short_check_delay
+        self.playlist_item_requests = 0
+        self.playlist_items_yielded = 0
 
-    def channels(self) -> MockChannels:
-        """Return a mock object."""
-        return MockChannels(self._channel_fixture)
+    async def set_user_authentication(
+        self, token: str, scopes: list[AuthScope]
+    ) -> None:
+        """Authenticate the user."""
 
-    def playlistItems(self) -> MockPlaylistItems:
-        """Return a mock object."""
-        return MockPlaylistItems(self._playlist_items_fixture)
+    async def get_user_channels(self) -> AsyncGenerator[YouTubeChannel]:
+        """Get channels for authenticated user."""
+        channels = await async_load_json_object_fixture(
+            self.hass, self._channel_fixture, DOMAIN
+        )
+        for item in channels["items"]:
+            yield YouTubeChannel(**item)
 
-    def subscriptions(self) -> MockSubscriptions:
-        """Return a mock object."""
-        return MockSubscriptions(self._subscriptions_fixture)
+    async def get_channels(
+        self, channel_ids: list[str]
+    ) -> AsyncGenerator[YouTubeChannel]:
+        """Get channels."""
+        if self._thrown_error is not None:
+            raise self._thrown_error
+        channels = await async_load_json_object_fixture(
+            self.hass, self._channel_fixture, DOMAIN
+        )
+        for item in channels["items"]:
+            yield YouTubeChannel(**item)
+
+    async def get_playlist_items(
+        self, playlist_id: str, amount: int
+    ) -> AsyncGenerator[YouTubePlaylistItem]:
+        """Get playlist items, paginating like the real API.
+
+        Cycles the fixture items forever in pages of `amount` (like a large
+        upload playlist), so tests can assert how far the coordinator
+        iterates before stopping.
+        """
+        channels = await async_load_json_object_fixture(
+            self.hass, self._playlist_items_fixture, DOMAIN
+        )
+        items = channels["items"]
+        if not items:
+            self.playlist_item_requests += 1
+            return
+        index = 0
+        while True:
+            self.playlist_item_requests += 1
+            for _ in range(amount):
+                self.playlist_items_yielded += 1
+                yield YouTubePlaylistItem(**items[index % len(items)])
+                index += 1
+
+    async def get_user_subscriptions(self) -> AsyncGenerator[YouTubeSubscription]:
+        """Get channels for authenticated user."""
+        channels = await async_load_json_object_fixture(
+            self.hass, self._subscriptions_fixture, DOMAIN
+        )
+        for item in channels["items"]:
+            yield YouTubeSubscription(**item)
+
+    def set_thrown_exception(self, exception: Exception) -> None:
+        """Set thrown exception for testing purposes."""
+        self._thrown_error = exception
+
+    async def is_short(self, video_id: str) -> bool:
+        """Return whether the video is a Short."""
+        await asyncio.sleep(self._short_check_delay)
+        return video_id in self._short_video_ids

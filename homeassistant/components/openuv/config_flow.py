@@ -1,16 +1,14 @@
 """Config flow to configure the OpenUV component."""
-from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
+import probatio
 from pyopenuv import Client
 from pyopenuv.errors import OpenUvError
-import voluptuous as vol
 
-from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import (
     CONF_API_KEY,
     CONF_ELEVATION,
@@ -18,7 +16,6 @@ from homeassistant.const import (
     CONF_LONGITUDE,
 )
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import aiohttp_client, config_validation as cv
 from homeassistant.helpers.schema_config_entry_flow import (
     SchemaFlowFormStep,
@@ -32,21 +29,22 @@ from .const import (
     DEFAULT_TO_WINDOW,
     DOMAIN,
 )
+from .coordinator import OpenUvConfigEntry
 
-STEP_REAUTH_SCHEMA = vol.Schema(
+STEP_REAUTH_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_API_KEY): str,
+        probatio.Required(CONF_API_KEY): str,
     }
 )
 
-OPTIONS_SCHEMA = vol.Schema(
+OPTIONS_SCHEMA = probatio.Schema(
     {
-        vol.Optional(
+        probatio.Optional(
             CONF_FROM_WINDOW, description={"suggested_value": DEFAULT_FROM_WINDOW}
-        ): vol.Coerce(float),
-        vol.Optional(
+        ): probatio.Coerce(float),
+        probatio.Optional(
             CONF_TO_WINDOW, description={"suggested_value": DEFAULT_TO_WINDOW}
-        ): vol.Coerce(float),
+        ): probatio.Coerce(float),
     }
 )
 
@@ -70,7 +68,7 @@ class OpenUvData:
         return f"{self.latitude}, {self.longitude}"
 
 
-class OpenUvFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
+class OpenUvFlowHandler(ConfigFlow, domain=DOMAIN):
     """Handle an OpenUV config flow."""
 
     VERSION = 2
@@ -80,26 +78,26 @@ class OpenUvFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self._reauth_data: Mapping[str, Any] = {}
 
     @property
-    def step_user_schema(self) -> vol.Schema:
+    def step_user_schema(self) -> probatio.Schema:
         """Return the config schema."""
-        return vol.Schema(
+        return probatio.Schema(
             {
-                vol.Required(CONF_API_KEY): str,
-                vol.Inclusive(
+                probatio.Required(CONF_API_KEY): str,
+                probatio.Inclusive(
                     CONF_LATITUDE, "coords", default=self.hass.config.latitude
                 ): cv.latitude,
-                vol.Inclusive(
+                probatio.Inclusive(
                     CONF_LONGITUDE, "coords", default=self.hass.config.longitude
                 ): cv.longitude,
-                vol.Optional(
+                probatio.Optional(
                     CONF_ELEVATION, default=self.hass.config.elevation
-                ): vol.Coerce(float),
+                ): probatio.Coerce(float),
             }
         )
 
     async def _async_verify(
-        self, data: OpenUvData, error_step_id: str, error_schema: vol.Schema
-    ) -> FlowResult:
+        self, data: OpenUvData, error_step_id: str, error_schema: probatio.Schema
+    ) -> ConfigFlowResult:
         """Verify the credentials and create/re-auth the entry."""
         websession = aiohttp_client.async_get_clientsession(self.hass)
         client = Client(data.api_key, 0, 0, session=websession)
@@ -134,18 +132,23 @@ class OpenUvFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> SchemaOptionsFlowHandler:
+    @override
+    def async_get_options_flow(
+        config_entry: OpenUvConfigEntry,
+    ) -> SchemaOptionsFlowHandler:
         """Define the config flow to handle options."""
         return SchemaOptionsFlowHandler(config_entry, OPTIONS_FLOW)
 
-    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
         """Handle configuration by re-auth."""
         self._reauth_data = entry_data
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle re-auth completion."""
         if not user_input:
             return self.async_show_form(
@@ -166,9 +169,10 @@ class OpenUvFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         return await self._async_verify(data, "reauth_confirm", STEP_REAUTH_SCHEMA)
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the start of the config flow."""
         if not user_input:
             return self.async_show_form(

@@ -1,8 +1,8 @@
 """Entity classes for the QNAP QSW integration."""
-from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from enum import StrEnum
+from typing import Any, override
 
 from aioqsw.const import (
     QSD_FIRMWARE,
@@ -14,16 +14,14 @@ from aioqsw.const import (
     QSD_SYSTEM_BOARD,
 )
 
-from homeassistant.backports.enum import StrEnum
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_URL
 from homeassistant.core import callback
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
-from homeassistant.helpers.entity import DeviceInfo, EntityDescription
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
+from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import MANUFACTURER
-from .coordinator import QswDataCoordinator, QswFirmwareCoordinator
+from .coordinator import QnapQswConfigEntry, QswDataCoordinator, QswFirmwareCoordinator
 
 
 class QswEntityType(StrEnum):
@@ -39,7 +37,7 @@ class QswDataEntity(CoordinatorEntity[QswDataCoordinator]):
     def __init__(
         self,
         coordinator: QswDataCoordinator,
-        entry: ConfigEntry,
+        entry: QnapQswConfigEntry,
         type_id: int | None = None,
     ) -> None:
         """Initialize."""
@@ -83,13 +81,14 @@ class QswDataEntity(CoordinatorEntity[QswDataCoordinator]):
         return value
 
 
-@dataclass
+@dataclass(frozen=True)
 class QswEntityDescriptionMixin:
     """Mixin to describe a QSW entity."""
 
     subkey: str
 
 
+@dataclass(frozen=True)
 class QswEntityDescription(EntityDescription, QswEntityDescriptionMixin):
     """Class to describe a QSW entity."""
 
@@ -102,6 +101,7 @@ class QswSensorEntity(QswDataEntity):
     entity_description: QswEntityDescription
 
     @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Update attributes when the coordinator updates."""
         self._async_update_attrs()
@@ -120,10 +120,12 @@ class QswSensorEntity(QswDataEntity):
 class QswFirmwareEntity(CoordinatorEntity[QswFirmwareCoordinator]):
     """Define a QNAP QSW firmware entity."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: QswFirmwareCoordinator,
-        entry: ConfigEntry,
+        entry: QnapQswConfigEntry,
     ) -> None:
         """Initialize."""
         super().__init__(coordinator)

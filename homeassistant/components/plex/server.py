@@ -1,6 +1,6 @@
 """Shared class to maintain Plex server instances."""
-from __future__ import annotations
 
+from copy import copy
 import logging
 import ssl
 import time
@@ -96,6 +96,7 @@ class PlexServer:
             cooldown=DEBOUNCE_TIMEOUT,
             immediate=True,
             function=self._async_update_platforms,
+            background=True,
         ).async_call
         self.thumbnail_cache = {}
 
@@ -111,7 +112,7 @@ class PlexServer:
         if not self._plex_account and self._use_plex_tv:
             try:
                 self._plex_account = plexapi.myplex.MyPlexAccount(token=self._token)
-            except (BadRequest, Unauthorized):
+            except BadRequest, Unauthorized:
                 self._use_plex_tv = False
                 _LOGGER.error("Not authorized to access plex.tv with provided token")
                 raise
@@ -190,8 +191,9 @@ class PlexServer:
                     error = error.__context__
                 if isinstance(error, ssl.SSLCertVerificationError):
                     domain = urlparse(self._url).netloc.split(":")[0]
-                    if domain.endswith("plex.direct") and error.args[0].startswith(
-                        f"hostname '{domain}' doesn't match"
+                    # OpenSSL's own wording for X509_V_ERR_HOSTNAME_MISMATCH
+                    if domain.endswith("plex.direct") and "Hostname mismatch" in str(
+                        error
                     ):
                         _LOGGER.warning(
                             "Plex SSL certificate's hostname changed, updating"
@@ -199,7 +201,8 @@ class PlexServer:
                         if _update_plexdirect_hostname():
                             config_entry_update_needed = True
                         else:
-                            raise Unauthorized(  # pylint: disable=raise-missing-from
+                            # pylint: disable-next=raise-missing-from
+                            raise Unauthorized(  # noqa: B904
                                 "New certificate cannot be validated"
                                 " with provided token"
                             )
@@ -398,7 +401,7 @@ class PlexServer:
                     identifier=machine_identifier,
                     token=self._plex_server.createToken(),
                 )
-            except (NotFound, requests.exceptions.ConnectionError):
+            except NotFound, requests.exceptions.ConnectionError:
                 _LOGGER.error(
                     "Direct client connection failed, will try again: %s (%s)",
                     name,
@@ -421,9 +424,7 @@ class PlexServer:
                 client = resource.connect(timeout=3)
                 _LOGGER.debug("Resource connection successful to plex.tv: %s", client)
             except NotFound:
-                _LOGGER.error(
-                    "Resource connection failed to plex.tv: %s", resource.name
-                )
+                _LOGGER.info("Resource connection failed to plex.tv: %s", resource.name)
             else:
                 client.proxyThroughServer(value=False, server=self._plex_server)
                 self._client_device_cache[client.machineIdentifier] = client
@@ -480,9 +481,9 @@ class PlexServer:
                     continue
 
                 process_device("session", player)
-                available_clients[player.machineIdentifier][
-                    "session"
-                ] = self.active_sessions[unique_id]
+                available_clients[player.machineIdentifier]["session"] = (
+                    self.active_sessions[unique_id]
+                )
 
         for device in devices:
             process_device("PMS", device)
@@ -568,7 +569,7 @@ class PlexServer:
     @property
     def url_in_use(self):
         """Return URL used for connected Plex server."""
-        return self._plex_server._baseurl  # pylint: disable=protected-access
+        return self._plex_server._baseurl  # noqa: SLF001
 
     @property
     def option_ignore_new_shared_users(self):
@@ -661,3 +662,14 @@ class PlexServer:
     def sensor_attributes(self):
         """Return active session information for use in activity sensor."""
         return {x.sensor_user: x.sensor_title for x in self.active_sessions.values()}
+
+    def set_plex_server(self, plex_server: PlexServer) -> None:
+        """Set the PlexServer instance."""
+        self._plex_server = plex_server
+
+    def switch_user(self, username: str) -> PlexServer:
+        """Return a shallow copy of a PlexServer as the provided user."""
+        new_server = copy(self)
+        new_server.set_plex_server(self.plex_server.switchUser(username))
+
+        return new_server

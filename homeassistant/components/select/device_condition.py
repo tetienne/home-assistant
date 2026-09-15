@@ -1,8 +1,10 @@
 """Provide the device conditions for Select."""
-from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 
+from homeassistant.components.device_automation import (
+    async_get_entity_registry_entry_or_raise,
+)
 from homeassistant.const import (
     CONF_CONDITION,
     CONF_DEVICE_ID,
@@ -22,7 +24,7 @@ from homeassistant.helpers.config_validation import DEVICE_CONDITION_BASE_SCHEMA
 from homeassistant.helpers.entity import get_capability
 from homeassistant.helpers.typing import ConfigType, TemplateVarsType
 
-from .const import ATTR_OPTIONS, CONF_OPTION, DOMAIN
+from .const import CONF_OPTION, DOMAIN, SelectEntityCapabilityAttribute
 
 # nypy: disallow-any-generics
 
@@ -30,10 +32,10 @@ CONDITION_TYPES = {"selected_option"}
 
 CONDITION_SCHEMA = DEVICE_CONDITION_BASE_SCHEMA.extend(
     {
-        vol.Required(CONF_ENTITY_ID): cv.entity_id,
-        vol.Required(CONF_TYPE): vol.In(CONDITION_TYPES),
-        vol.Required(CONF_OPTION): str,
-        vol.Optional(CONF_FOR): cv.positive_time_period_dict,
+        probatio.Required(CONF_ENTITY_ID): cv.entity_id_or_uuid,
+        probatio.Required(CONF_TYPE): probatio.In(CONDITION_TYPES),
+        probatio.Required(CONF_OPTION): str,
+        probatio.Optional(CONF_FOR): cv.positive_time_period_dict,
     }
 )
 
@@ -48,7 +50,7 @@ async def async_get_conditions(
             CONF_CONDITION: "device",
             CONF_DEVICE_ID: device_id,
             CONF_DOMAIN: DOMAIN,
-            CONF_ENTITY_ID: entry.entity_id,
+            CONF_ENTITY_ID: entry.id,
             CONF_TYPE: "selected_option",
         }
         for entry in er.async_entries_for_device(registry, device_id)
@@ -62,11 +64,14 @@ def async_condition_from_config(
 ) -> condition.ConditionCheckerType:
     """Create a function to test a device condition."""
 
+    registry = er.async_get(hass)
+    entity_id = er.async_resolve_entity_id(registry, config[CONF_ENTITY_ID])
+
     @callback
     def test_is_state(hass: HomeAssistant, variables: TemplateVarsType) -> bool:
         """Test if an entity is a certain state."""
         return condition.state(
-            hass, config[CONF_ENTITY_ID], config[CONF_OPTION], config.get(CONF_FOR)
+            hass, entity_id, config[CONF_OPTION], config.get(CONF_FOR)
         )
 
     return test_is_state
@@ -74,18 +79,25 @@ def async_condition_from_config(
 
 async def async_get_condition_capabilities(
     hass: HomeAssistant, config: ConfigType
-) -> dict[str, vol.Schema]:
+) -> dict[str, probatio.Schema]:
     """List condition capabilities."""
+
     try:
-        options = get_capability(hass, config[CONF_ENTITY_ID], ATTR_OPTIONS) or []
+        entry = async_get_entity_registry_entry_or_raise(hass, config[CONF_ENTITY_ID])
+        options = (
+            get_capability(
+                hass, entry.entity_id, SelectEntityCapabilityAttribute.OPTIONS
+            )
+            or []
+        )
     except HomeAssistantError:
         options = []
 
     return {
-        "extra_fields": vol.Schema(
+        "extra_fields": probatio.Schema(
             {
-                vol.Required(CONF_OPTION): vol.In(options),
-                vol.Optional(CONF_FOR): cv.positive_time_period_dict,
+                probatio.Required(CONF_OPTION): probatio.In(options),
+                probatio.Optional(CONF_FOR): cv.positive_time_period_dict,
             }
         )
     }

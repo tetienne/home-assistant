@@ -1,9 +1,10 @@
 """The tests for Humidifier device actions."""
+
+from probatio import to_field_list
 import pytest
 from pytest_unordered import unordered
-import voluptuous_serialize
 
-import homeassistant.components.automation as automation
+from homeassistant.components import automation
 from homeassistant.components.device_automation import DeviceAutomationType
 from homeassistant.components.humidifier import DOMAIN, const, device_action
 from homeassistant.const import STATE_ON, EntityCategory
@@ -21,11 +22,6 @@ from tests.common import (
     async_get_device_automations,
     async_mock_service,
 )
-
-
-@pytest.fixture(autouse=True, name="stub_blueprint_populate")
-def stub_blueprint_populate_autouse(stub_blueprint_populate: None) -> None:
-    """Stub copying the blueprints to the config folder."""
 
 
 @pytest.mark.parametrize(
@@ -62,17 +58,18 @@ async def test_get_actions(
     )
     if set_state:
         hass.states.async_set(
-            f"{DOMAIN}.test_5678", "attributes", {"supported_features": features_state}
+            entity_entry.entity_id,
+            "attributes",
+            {"supported_features": features_state},
         )
     expected_actions = []
-    basic_action_types = ["set_humidity"]
-    toggle_action_types = ["turn_on", "turn_off", "toggle"]
+    basic_action_types = ["set_humidity", "turn_on", "turn_off", "toggle"]
     expected_actions += [
         {
             "domain": DOMAIN,
             "type": action,
             "device_id": device_entry.id,
-            "entity_id": f"{DOMAIN}.test_5678",
+            "entity_id": entity_entry.id,
             "metadata": {"secondary": False},
         }
         for action in basic_action_types
@@ -85,16 +82,6 @@ async def test_get_actions(
             "entity_id": entity_entry.id,
             "metadata": {"secondary": False},
         }
-        for action in toggle_action_types
-    ]
-    expected_actions += [
-        {
-            "domain": DOMAIN,
-            "type": action,
-            "device_id": device_entry.id,
-            "entity_id": f"{DOMAIN}.test_5678",
-            "metadata": {"secondary": False},
-        }
         for action in expected_action_types
     ]
     actions = await async_get_device_automations(
@@ -105,12 +92,12 @@ async def test_get_actions(
 
 @pytest.mark.parametrize(
     ("hidden_by", "entity_category"),
-    (
+    [
         (RegistryEntryHider.INTEGRATION, None),
         (RegistryEntryHider.USER, None),
         (None, EntityCategory.CONFIG),
         (None, EntityCategory.DIAGNOSTIC),
-    ),
+    ],
 )
 async def test_get_actions_hidden_auxiliary(
     hass: HomeAssistant,
@@ -135,19 +122,8 @@ async def test_get_actions_hidden_auxiliary(
         hidden_by=hidden_by,
         supported_features=0,
     )
-    basic_action_types = ["set_humidity"]
-    toggle_action_types = ["turn_on", "turn_off", "toggle"]
+    basic_action_types = ["set_humidity", "turn_on", "turn_off", "toggle"]
     expected_actions = []
-    expected_actions += [
-        {
-            "domain": DOMAIN,
-            "type": action,
-            "device_id": device_entry.id,
-            "entity_id": f"{DOMAIN}.test_5678",
-            "metadata": {"secondary": True},
-        }
-        for action in basic_action_types
-    ]
     expected_actions += [
         {
             "domain": DOMAIN,
@@ -156,7 +132,7 @@ async def test_get_actions_hidden_auxiliary(
             "entity_id": entity_entry.id,
             "metadata": {"secondary": True},
         }
-        for action in toggle_action_types
+        for action in basic_action_types
     ]
     actions = await async_get_device_automations(
         hass, DeviceAutomationType.ACTION, device_entry.id
@@ -164,9 +140,21 @@ async def test_get_actions_hidden_auxiliary(
     assert actions == unordered(expected_actions)
 
 
-async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -> None:
+async def test_action(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
     """Test for actions."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     hass.states.async_set(
         entry.entity_id,
@@ -186,7 +174,7 @@ async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -
                     },
                     "action": {
                         "domain": DOMAIN,
-                        "device_id": "abcdefgh",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "turn_off",
                     },
@@ -198,7 +186,7 @@ async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -
                     },
                     "action": {
                         "domain": DOMAIN,
-                        "device_id": "abcdefgh",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "turn_on",
                     },
@@ -207,7 +195,7 @@ async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -
                     "trigger": {"platform": "event", "event_type": "test_event_toggle"},
                     "action": {
                         "domain": DOMAIN,
-                        "device_id": "abcdefgh",
+                        "device_id": device_entry.id,
                         "entity_id": entry.id,
                         "type": "toggle",
                     },
@@ -219,8 +207,8 @@ async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -
                     },
                     "action": {
                         "domain": DOMAIN,
-                        "device_id": "abcdefgh",
-                        "entity_id": entry.entity_id,
+                        "device_id": device_entry.id,
+                        "entity_id": entry.id,
                         "type": "set_humidity",
                         "humidity": 35,
                     },
@@ -232,8 +220,8 @@ async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -
                     },
                     "action": {
                         "domain": DOMAIN,
-                        "device_id": "abcdefgh",
-                        "entity_id": entry.entity_id,
+                        "device_id": device_entry.id,
+                        "entity_id": entry.id,
                         "type": "set_mode",
                         "mode": const.MODE_AWAY,
                     },
@@ -242,11 +230,11 @@ async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -
         },
     )
 
-    set_humidity_calls = async_mock_service(hass, "humidifier", "set_humidity")
-    set_mode_calls = async_mock_service(hass, "humidifier", "set_mode")
-    turn_on_calls = async_mock_service(hass, "humidifier", "turn_on")
-    turn_off_calls = async_mock_service(hass, "humidifier", "turn_off")
-    toggle_calls = async_mock_service(hass, "humidifier", "toggle")
+    set_humidity_calls = async_mock_service(hass, DOMAIN, "set_humidity")
+    set_mode_calls = async_mock_service(hass, DOMAIN, "set_mode")
+    turn_on_calls = async_mock_service(hass, DOMAIN, "turn_on")
+    turn_off_calls = async_mock_service(hass, DOMAIN, "turn_off")
+    toggle_calls = async_mock_service(hass, DOMAIN, "toggle")
 
     assert len(set_humidity_calls) == 0
     assert len(set_mode_calls) == 0
@@ -312,10 +300,20 @@ async def test_action(hass: HomeAssistant, entity_registry: er.EntityRegistry) -
 
 
 async def test_action_legacy(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
 ) -> None:
     """Test for actions."""
-    entry = entity_registry.async_get_or_create(DOMAIN, "test", "5678")
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entry = entity_registry.async_get_or_create(
+        DOMAIN, "test", "5678", device_id=device_entry.id
+    )
 
     hass.states.async_set(
         entry.entity_id,
@@ -335,7 +333,7 @@ async def test_action_legacy(
                     },
                     "action": {
                         "domain": DOMAIN,
-                        "device_id": "abcdefgh",
+                        "device_id": device_entry.id,
                         "entity_id": entry.entity_id,
                         "type": "set_mode",
                         "mode": const.MODE_AWAY,
@@ -345,7 +343,7 @@ async def test_action_legacy(
         },
     )
 
-    set_mode_calls = async_mock_service(hass, "humidifier", "set_mode")
+    set_mode_calls = async_mock_service(hass, DOMAIN, "set_mode")
 
     hass.bus.async_fire("test_event_set_mode")
     await hass.async_block_till_done()
@@ -475,7 +473,151 @@ async def test_capabilities(
     )
     if set_state:
         hass.states.async_set(
-            f"{DOMAIN}.test_5678",
+            entity_entry.entity_id,
+            STATE_ON,
+            capabilities_state,
+        )
+
+    capabilities = await device_action.async_get_action_capabilities(
+        hass,
+        {
+            "domain": DOMAIN,
+            "device_id": "abcdefgh",
+            "entity_id": entity_entry.id,
+            "type": action,
+        },
+    )
+
+    assert capabilities and "extra_fields" in capabilities
+
+    assert (
+        to_field_list(
+            capabilities["extra_fields"], custom_serializer=cv.custom_serializer
+        )
+        == expected_capabilities
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "set_state",
+        "capabilities_reg",
+        "capabilities_state",
+        "action",
+        "expected_capabilities",
+    ),
+    [
+        (
+            False,
+            {},
+            {},
+            "set_humidity",
+            [
+                {
+                    "name": "humidity",
+                    "required": True,
+                    "type": "integer",
+                }
+            ],
+        ),
+        (
+            False,
+            {},
+            {},
+            "set_mode",
+            [
+                {
+                    "name": "mode",
+                    "options": [],
+                    "required": True,
+                    "type": "select",
+                }
+            ],
+        ),
+        (
+            False,
+            {const.ATTR_AVAILABLE_MODES: [const.MODE_HOME, const.MODE_AWAY]},
+            {},
+            "set_mode",
+            [
+                {
+                    "name": "mode",
+                    "options": [("home", "home"), ("away", "away")],
+                    "required": True,
+                    "type": "select",
+                }
+            ],
+        ),
+        (
+            True,
+            {},
+            {},
+            "set_humidity",
+            [
+                {
+                    "name": "humidity",
+                    "required": True,
+                    "type": "integer",
+                }
+            ],
+        ),
+        (
+            True,
+            {},
+            {},
+            "set_mode",
+            [
+                {
+                    "name": "mode",
+                    "options": [],
+                    "required": True,
+                    "type": "select",
+                }
+            ],
+        ),
+        (
+            True,
+            {},
+            {const.ATTR_AVAILABLE_MODES: [const.MODE_HOME, const.MODE_AWAY]},
+            "set_mode",
+            [
+                {
+                    "name": "mode",
+                    "options": [("home", "home"), ("away", "away")],
+                    "required": True,
+                    "type": "select",
+                }
+            ],
+        ),
+    ],
+)
+async def test_capabilities_legacy(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    set_state,
+    capabilities_reg,
+    capabilities_state,
+    action,
+    expected_capabilities,
+) -> None:
+    """Test getting capabilities."""
+    config_entry = MockConfigEntry(domain="test", data={})
+    config_entry.add_to_hass(hass)
+    device_entry = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, "12:34:56:AB:CD:EF")},
+    )
+    entity_entry = entity_registry.async_get_or_create(
+        DOMAIN,
+        "test",
+        "5678",
+        device_id=device_entry.id,
+        capabilities=capabilities_reg,
+    )
+    if set_state:
+        hass.states.async_set(
+            entity_entry.entity_id,
             STATE_ON,
             capabilities_state,
         )
@@ -493,7 +635,7 @@ async def test_capabilities(
     assert capabilities and "extra_fields" in capabilities
 
     assert (
-        voluptuous_serialize.convert(
+        to_field_list(
             capabilities["extra_fields"], custom_serializer=cv.custom_serializer
         )
         == expected_capabilities
@@ -534,7 +676,7 @@ async def test_capabilities_missing_entity(
     assert capabilities and "extra_fields" in capabilities
 
     assert (
-        voluptuous_serialize.convert(
+        to_field_list(
             capabilities["extra_fields"], custom_serializer=cv.custom_serializer
         )
         == expected_capabilities
